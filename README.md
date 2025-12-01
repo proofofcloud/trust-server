@@ -69,8 +69,6 @@ sudo docker run \
     --rm \
     -p 8080:8080 \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -v ./whitelist.csv:/app/whitelist.csv \
-    -v ./jwt_key.pem:/app/jwt_key.pem \
     -v ./keys.json:/app/keys.json \
     ghcr.io/proofofcloud/trust-server@sha256:e7a1f22b1255a589d55f88352ba7f864e2dd7c2dd25d08608166c8308e362faa
 ```

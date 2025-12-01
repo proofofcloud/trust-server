@@ -14,39 +14,35 @@ const state = {
 
 function loadSecrets() {
   try {
-    if (!fs.existsSync(config.PATHS.PRIVATE_KEY)) {
-      throw new Error(`Private key not found at ${config.PATHS.PRIVATE_KEY}. \nHint: Set PRIVATE_KEY_PATH env var or place jwt_key.pem in the src dir.`);
+    if (!config.PRIVATE_KEY) {
+      throw new Error("❌ CRITICAL ERROR: PRIVATE_KEY environment variable is not set.");
     }
-    state.privateKey = fs.readFileSync(config.PATHS.PRIVATE_KEY, "utf8");
+
+    state.privateKey = config.PRIVATE_KEY.replace(/\\n/g, '\n');
+    console.log("✅ Private Key loaded successfully from environment.");
 
     const pubKeyObject = crypto.createPublicKey(state.privateKey);
     state.publicKey = pubKeyObject.export({ type: "spki", format: "pem" });
 
     if (fs.existsSync(config.PATHS.WHITELIST)) {
       const whitelistRaw = fs.readFileSync(config.PATHS.WHITELIST, "utf8");
-      
       state.whitelist = whitelistRaw
         .split(/\r?\n/)
         .map(line => line.trim())
         .filter(line => line.length > 0 && !line.startsWith('#')) // Skip empty lines & comments
         .map(line => {
           const [id, label] = line.split(',');
-          return { 
-            id: id.trim(), 
-            label: label ? label.trim() : 'unlabeled-node' 
-          };
+          return { id: id.trim(), label: label ? label.trim() : 'unlabeled' };
         });
-        
-      console.log(`✅ Loaded ${state.whitelist.length} whitelisted nodes.`);
+      console.log(`✅ Loaded ${state.whitelist.length} whitelist entries.`);
     } else {
-      console.warn("⚠️  No whitelist found. All machine IDs will be rejected.");
-      state.whitelist = [];
+      console.warn("⚠️  No whitelist found. All requests will be rejected.");
     }
 
     if (fs.existsSync(config.PATHS.KEYS)) {
       const keysRaw = fs.readFileSync(config.PATHS.KEYS, "utf8");
       state.keyRegistry = JSON.parse(keysRaw);
-      
+
       for (const [kid, keyString] of Object.entries(state.keyRegistry)) {
         if (keyString.replace(/\\n/g, '\n').trim() === state.publicKey.trim()) {
           state.keyId = kid;
@@ -56,13 +52,13 @@ function loadSecrets() {
     }
 
     if (!state.keyId) {
-      console.warn("⚠️  WARNING: The loaded private key does not match any public key in keys.json. Tokens will be signed, but 'kid' header will be missing.");
+      console.warn("⚠️  WARNING: Private key does not match any ID in keys.json. 'kid' header will be missing.");
     } else {
-      console.log(`✅ Secrets loaded. Using Key ID: ${state.keyId}`);
+      console.log(`✅ Key ID identified: ${state.keyId}`);
     }
 
   } catch (err) {
-    console.error("❌ Failed to load configuration:", err.message);
+    console.error(err.message);
     process.exit(1);
   }
 }
@@ -120,7 +116,6 @@ async function processQuote(hexQuote) {
   const token = jwt.sign(payload, state.privateKey, {
     algorithm: "RS256",
     header: { kid: state.keyId },
-    expiresIn: "1h" // Good practice: Add expiration
   });
 
   return { 
