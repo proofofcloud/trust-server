@@ -72,7 +72,7 @@ sudo docker run \
     -v ./whitelist.csv:/app/whitelist.csv \
     -v ./jwt_key.pem:/app/jwt_key.pem \
     -v ./keys.json:/app/keys.json \
-    ghcr.io/proofofcloud/trust-server@sha256:e7fb8a0db9e91d1276750b3a4c69ce15524285abda33bd22a671d375dda39737
+    ghcr.io/proofofcloud/trust-server@sha256:e7a1f22b1255a589d55f88352ba7f864e2dd7c2dd25d08608166c8308e362faa
 ```
 
 The service will run on `http://localhost:8080`
