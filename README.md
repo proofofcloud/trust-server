@@ -70,7 +70,7 @@ sudo docker run \
     -p 8080:8080 \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v ./keys.json:/app/keys.json \
-    ghcr.io/proofofcloud/trust-server:sha-1e44ad0e83daefc6137f2ec95ac952394735ab34
+    ghcr.io/proofofcloud/trust-server:sha-f39418507536be1cb8d97368b238c3705b7bfc51
 ```
 
 The service will run on `http://localhost:8080`
