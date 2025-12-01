@@ -11,7 +11,7 @@ This service validates SGX and TDX quotes, extracts the PPID (Platform Provision
 - **Quote Processing**: Validates SGX and TDX DCAP quotes in hexadecimal format
 - **PPID Extraction**: Extracts Platform Provisioning ID from quote data
 - **Machine ID Generation**: Creates unique machine identifiers from PPID
-- **Whitelist Verification**: Checks machine IDs against a remote whitelist
+- **Whitelist Verification**: Checks machine IDs against a whitelist taken from proofofcloud database of verified machines
 - **JWT Generation**: Issues RS256-signed JWT tokens for verified quotes
 
 ## API Endpoints
