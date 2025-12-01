@@ -14,12 +14,22 @@ const state = {
 
 function loadSecrets() {
   try {
-    if (!config.PRIVATE_KEY) {
-      throw new Error("❌ CRITICAL ERROR: PRIVATE_KEY environment variable is not set.");
+    if (!config.PRIVATE_KEY_BASE64) {
+      throw new Error("❌ CRITICAL ERROR: PRIVATE_KEY_BASE64 environment variable is not set.");
     }
 
-    state.privateKey = config.PRIVATE_KEY.replace(/\\n/g, '\n');
-    console.log("✅ Private Key loaded successfully from environment.");
+    try {
+      const buffer = Buffer.from(config.PRIVATE_KEY_BASE64, 'base64');
+      state.privateKey = buffer.toString('utf-8');
+    } catch (e) {
+      throw new Error("❌ Failed to decode Base64 private key string.");
+    }
+
+    if (!state.privateKey.includes("BEGIN") || !state.privateKey.includes("PRIVATE KEY")) {
+        throw new Error("❌ Decoded private key does not look like a valid PEM file.");
+    }
+
+    console.log("✅ Private Key loaded and decoded successfully.");
 
     const pubKeyObject = crypto.createPublicKey(state.privateKey);
     state.publicKey = pubKeyObject.export({ type: "spki", format: "pem" });
