@@ -1,0 +1,32 @@
+{
+  "name": "trust-server",
+  "version": "1.0.0",
+  "description": "A Node.js web service for processing Intel SGX and TDX DCAP quotes, extracting platform identifiers, and generating JWT tokens for verified enclaves.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "sgx",
+    "tdx",
+    "dcap",
+    "attestation",
+    "quote-verification",
+    "confidential-computing",
+    "jwt",
+    "node",
+    "intel-sgx"
+  ],
+  "author": "Proof of Cloud",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
