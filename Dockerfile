@@ -9,6 +9,7 @@ RUN npm ci
 RUN apk add --no-cache docker-cli
 
 COPY src/*.js .
+COPY src/whitelist.csv .
 
 EXPOSE 8080
 
