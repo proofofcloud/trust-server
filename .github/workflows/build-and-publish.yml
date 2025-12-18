@@ -29,7 +29,7 @@ jobs:
       - name: Inject Whitelist
         run: |
           echo "Copying whitelist.csv from database repo..."
-          cp -v temp-database-repo/phala.csv ./src/whitelist.csv
+          cat temp-database-repo/*.csv > ./src/whitelist.csv
           rm -rf temp-database-repo
 
       - name: Log in to the Container registry
