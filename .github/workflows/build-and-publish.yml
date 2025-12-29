@@ -1,7 +1,8 @@
 name: Build and Publish Docker Image
 
 on:
-  workflow_dispatch:
+  repository_dispatch:
+    types: [db-updated]
 
 env:
   REGISTRY: ghcr.io
