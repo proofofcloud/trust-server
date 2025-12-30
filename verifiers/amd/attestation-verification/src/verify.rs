@@ -1,0 +1,440 @@
+use crate::certs::{CertificateFetcher, Certs, FetcherError};
+use clap::ValueEnum;
+use openssl::{ecdsa::EcdsaSig, sha::Sha384};
+use serde::Deserialize;
+use sev::{
+    certs::snp::{Certificate, Verifiable},
+    firmware::{guest::AttestationReport, host::CertType},
+    parser::ByteParser,
+};
+use std::{io, sync::Arc};
+use tracing::{info, warn};
+use x509_parser::{
+    asn1_rs::Oid,
+    der_parser::oid,
+    prelude::{FromDer, X509Certificate, X509Extension},
+    x509::X509Name,
+};
+
+#[derive(Clone)]
+pub struct ReportVerifier {
+    fetcher: Arc<dyn CertificateFetcher>,
+}
+
+impl ReportVerifier {
+    pub fn new(fetcher: Arc<dyn CertificateFetcher>) -> Self {
+        Self { fetcher }
+    }
+
+    pub async fn verify_report(&self, report: &AttestationReport) -> Result<(), VerificationError> {
+        let processor = Self::detect_processor(report)?;
+        info!("Using processor model {processor:?} for verification");
+
+        let certs = self.fetcher.fetch_certs(&processor, report).await?;
+        Self::verify_certs(&certs)?;
+
+        Self::verify_report_signature(&certs.vcek, report)?;
+        Self::verify_attestation_tcb(&certs.vcek, report, &processor)?;
+        info!("Verification successful");
+        Ok(())
+    }
+
+    fn detect_processor(report: &AttestationReport) -> Result<Processor, VerificationError> {
+        info!("Detecting processor type based on attestation report");
+        match Processor::try_from(report) {
+            Ok(processor) => Ok(processor),
+            Err(FromReportError::AmbiguousMilanGenoa) => {
+                warn!("Processor could be Milan or Genoa, assuming Genoa");
+                Ok(Processor::Genoa)
+            }
+            Err(e) => Err(VerificationError::DetectProcessor(e)),
+        }
+    }
+
+    fn verify_certs(certs: &Certs) -> Result<(), CertificateValidationError> {
+        let ark = &certs.chain.ark;
+        let ask = &certs.chain.ask;
+
+        // Ensure ARK is self signed.
+        match (ark, ark).verify() {
+            Ok(()) => {}
+            Err(e) => match e.kind() {
+                io::ErrorKind::Other => return Err(CertificateValidationError::ArkNotSelfSigned),
+                _ => {
+                    return Err(CertificateValidationError::VerificationFailure(
+                        "ARK",
+                        e.to_string(),
+                    ));
+                }
+            },
+        }
+
+        // Ensure ARK signs ASK.
+        match (ark, ask).verify() {
+            Ok(()) => {}
+            Err(e) => match e.kind() {
+                io::ErrorKind::Other => return Err(CertificateValidationError::AskNotSignedByArk),
+                _ => {
+                    return Err(CertificateValidationError::VerificationFailure(
+                        "ASK",
+                        e.to_string(),
+                    ));
+                }
+            },
+        }
+
+        // Ensure ASK signs VCEK.
+        match (ask, &certs.vcek).verify() {
+            Ok(()) => {}
+            Err(e) => match e.kind() {
+                io::ErrorKind::Other => return Err(CertificateValidationError::VcekNotSignedByAsk),
+                _ => {
+                    return Err(CertificateValidationError::VerificationFailure(
+                        "VCEK",
+                        e.to_string(),
+                    ));
+                }
+            },
+        }
+        Ok(())
+    }
+
+    fn verify_report_signature(
+        vcek: &Certificate,
+        report: &AttestationReport,
+    ) -> Result<(), VerificationError> {
+        use VerificationError::*;
+        let vek_pubkey = vcek
+            .public_key()
+            .map_err(|_| InvalidVcekPubKey)?
+            .ec_key()
+            .map_err(|_| InvalidVcekPubKey)?;
+
+        let signature =
+            EcdsaSig::try_from(&report.signature).map_err(|_| MalformedReportSignature)?;
+        let report_bytes = report.to_bytes().map_err(SerializeReport)?;
+        let signed_bytes = &report_bytes[0x0..0x2A0];
+
+        let mut hasher = Sha384::new();
+        hasher.update(signed_bytes);
+        let digest = hasher.finish();
+
+        // Verify signature
+        if signature
+            .verify(digest.as_ref(), vek_pubkey.as_ref())
+            .map_err(|_| InvalidSignature)?
+        {
+            Ok(())
+        } else {
+            Err(InvalidSignature)
+        }
+    }
+
+    fn check_cert_bytes(ext: &X509Extension, val: &[u8]) -> Result<bool, VerificationError> {
+        use VerificationError::InvalidCertificate;
+        let output = match ext.value[0] {
+            // Integer
+            0x2 => {
+                if ext.value[1] != 0x1 && ext.value[1] != 0x2 {
+                    return Err(InvalidCertificate("invalid octet length encountered"));
+                } else if let Some(byte_value) = ext.value.last() {
+                    byte_value == &val[0]
+                } else {
+                    false
+                }
+            }
+            // Octet String
+            0x4 => {
+                if ext.value[1] != 0x40 {
+                    return Err(InvalidCertificate("invalid octet length encountered!"));
+                } else if ext.value[2..].len() != 0x40 {
+                    return Err(InvalidCertificate("invalid size of bytes encountered!"));
+                } else if val.len() != 0x40 {
+                    return Err(InvalidCertificate(
+                        "invalid certificate harward id length encountered!",
+                    ));
+                }
+
+                &ext.value[2..] == val
+            }
+            // Legacy and others.
+            _ => {
+                // Keep around for a bit for old VCEK without x509 DER encoding.
+                if ext.value.len() == 0x40 && val.len() == 0x40 {
+                    ext.value == val
+                } else {
+                    return Err(InvalidCertificate("invalid type encountered!"));
+                }
+            }
+        };
+        Ok(output)
+    }
+
+    fn parse_common_name(field: &X509Name) -> Result<CertType, VerificationError> {
+        if let Some(val) = field
+            .iter_common_name()
+            .next()
+            .and_then(|cn| cn.as_str().ok())
+        {
+            match val.to_lowercase() {
+                x if x.contains("ark") => Ok(CertType::ARK),
+                x if x.contains("ask") | x.contains("sev") => Ok(CertType::ASK),
+                x if x.contains("vcek") => Ok(CertType::VCEK),
+                x if x.contains("vlek") => Ok(CertType::VLEK),
+                x if x.contains("crl") => Ok(CertType::CRL),
+                _ => Err(VerificationError::InvalidCertificate(
+                    "unknown certificate type encountered",
+                )),
+            }
+        } else {
+            Err(VerificationError::InvalidCertificate(
+                "certificate subject Common Name is unknown",
+            ))
+        }
+    }
+
+    fn verify_attestation_tcb(
+        vcek: &Certificate,
+        report: &AttestationReport,
+        processor: &Processor,
+    ) -> Result<(), VerificationError> {
+        use VerificationError::*;
+        let vek_der = vcek
+            .to_der()
+            .map_err(|e| MalformedCertificate(e.to_string()))?;
+        let (_, vek_x509) =
+            X509Certificate::from_der(&vek_der).map_err(|e| MalformedCertificate(e.to_string()))?;
+
+        // Collect extensions from VEK
+        let extensions = vek_x509
+            .extensions_map()
+            .map_err(|_| InvalidCertificate("no extensions map"))?;
+
+        let common_name: CertType = Self::parse_common_name(vek_x509.subject())?;
+
+        // Compare bootloaders
+        if let Some(cert_bl) = extensions.get(&SnpOid::BootLoader.oid())
+            && !Self::check_cert_bytes(cert_bl, &report.reported_tcb.bootloader.to_le_bytes())?
+        {
+            return Err(InvalidCertificate(
+                "report TCB boot loader and certificate boot loader mismatch encountered",
+            ));
+        }
+
+        // Compare TEE information
+        if let Some(cert_tee) = extensions.get(&SnpOid::Tee.oid())
+            && !Self::check_cert_bytes(cert_tee, &report.reported_tcb.tee.to_le_bytes())?
+        {
+            return Err(InvalidCertificate(
+                "report TCB TEE and certificate TEE mismatch encountered",
+            ));
+        }
+
+        // Compare SNP information
+        if let Some(cert_snp) = extensions.get(&SnpOid::Snp.oid())
+            && !Self::check_cert_bytes(cert_snp, &report.reported_tcb.snp.to_le_bytes())?
+        {
+            return Err(InvalidCertificate(
+                "report TCB SNP and Certificate SNP mismatch encountered",
+            ));
+        }
+
+        // Compare Microcode information
+        if let Some(cert_ucode) = extensions.get(&SnpOid::Ucode.oid())
+            && !Self::check_cert_bytes(cert_ucode, &report.reported_tcb.microcode.to_le_bytes())?
+        {
+            return Err(InvalidCertificate(
+                "report TCB microcode and certificate microcode mismatch encountered",
+            ));
+        }
+
+        // Compare HWID information only on VCEK
+        if common_name == CertType::VCEK
+            && let Some(cert_hwid) = extensions.get(&SnpOid::HwId.oid())
+            && !Self::check_cert_bytes(cert_hwid, &report.chip_id)?
+        {
+            return Err(InvalidCertificate(
+                "report TCB ID and certificate ID mismatch encountered",
+            ));
+        }
+
+        if processor == &Processor::Turin {
+            if report.version < 3 {
+                return Err(InvalidCertificate(
+                    "Turin attestation is not supported in version 2 of the report",
+                ));
+            }
+            if let Some(cert_fmc) = extensions.get(&SnpOid::Fmc.oid()) {
+                if let Some(fmc) = report.reported_tcb.fmc {
+                    if !Self::check_cert_bytes(cert_fmc, fmc.to_le_bytes().as_slice())? {
+                        return Err(InvalidCertificate(
+                            "report TCB FMC and certificate FMC mismatch encountered",
+                        ));
+                    }
+                } else {
+                    return Err(InvalidCertificate(
+                        "attestation report TCB FMC is not present in the report, but is expected for {processor:?} model",
+                    ));
+                };
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(ValueEnum, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Processor {
+    /// 3rd Gen AMD EPYC Processor (Standard)
+    Milan,
+
+    /// 4th Gen AMD EPYC Processor (Standard)
+    Genoa,
+
+    /// 4th Gen AMD EPYC Processor (Performance)
+    Bergamo,
+
+    /// 4th Gen AMD EPYC Processor (Edge)
+    Siena,
+
+    /// 5th Gen AMD EPYC Processor (Standard)
+    Turin,
+}
+
+impl Processor {
+    pub(crate) fn to_kds_url(&self) -> &'static str {
+        match self {
+            Processor::Genoa | Processor::Siena | Processor::Bergamo => "Genoa",
+            Processor::Milan => "Milan",
+            Processor::Turin => "Turin",
+        }
+    }
+}
+
+impl TryFrom<&AttestationReport> for Processor {
+    type Error = FromReportError;
+
+    fn try_from(report: &AttestationReport) -> Result<Self, Self::Error> {
+        if report.version < 3 {
+            if report.chip_id == [0; 64] {
+                return Err(FromReportError::ZeroChipIp);
+            } else {
+                let chip_id = report.chip_id;
+                if chip_id[8..64] == [0; 56] {
+                    return Ok(Processor::Turin);
+                } else {
+                    return Err(FromReportError::AmbiguousMilanGenoa);
+                }
+            }
+        }
+
+        let family = report
+            .cpuid_fam_id
+            .ok_or(FromReportError::MissingFamilyId)?;
+        let model = report.cpuid_mod_id.ok_or(FromReportError::MissingModelId)?;
+
+        match family {
+            0x19 => match model {
+                0x0..=0xF => Ok(Processor::Milan),
+                0x10..=0x1F | 0xA0..0xAF => Ok(Processor::Genoa),
+                _ => Err(FromReportError::ModelNotSupported),
+            },
+            0x1A => match model {
+                0x0..=0x11 => Ok(Processor::Turin),
+                _ => Err(FromReportError::ModelNotSupported),
+            },
+            _ => Err(FromReportError::FamilyNotSupported),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum VerificationError {
+    #[error("failed to fetch certificates: {0}")]
+    FetchCerts(#[from] FetcherError),
+
+    #[error("failed to verity certificates: {0}")]
+    CertVerification(#[from] CertificateValidationError),
+
+    #[error("failed to detect processor: {0}")]
+    DetectProcessor(FromReportError),
+
+    #[error("invalid measurement hash, expected = {expected}, got = {actual}")]
+    InvalidMeasurement { expected: String, actual: String },
+
+    #[error("invalid VCEK public key")]
+    InvalidVcekPubKey,
+
+    #[error("malformed report signature")]
+    MalformedReportSignature,
+
+    #[error("invalid report signature")]
+    InvalidSignature,
+
+    #[error("failed to serialize report: {0}")]
+    SerializeReport(io::Error),
+
+    #[error("malformed AMD certificate: {0}")]
+    MalformedCertificate(String),
+
+    #[error("invalid AMD certificate: {0}")]
+    InvalidCertificate(&'static str),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum FromReportError {
+    #[error("attestation report version is lower than 3 and Chip ID is all 0s")]
+    ZeroChipIp,
+
+    #[error("attestation report could be either Milan or Genoa")]
+    AmbiguousMilanGenoa,
+
+    #[error("report version 3+ is missing family ID")]
+    MissingFamilyId,
+
+    #[error("report version 3+ is missing model ID")]
+    MissingModelId,
+
+    #[error("processor model not supported")]
+    ModelNotSupported,
+
+    #[error("processor family not supported")]
+    FamilyNotSupported,
+}
+
+enum SnpOid {
+    BootLoader,
+    Tee,
+    Snp,
+    Ucode,
+    HwId,
+    Fmc,
+}
+
+impl SnpOid {
+    fn oid(&self) -> Oid<'_> {
+        match self {
+            SnpOid::BootLoader => oid!(1.3.6.1.4.1.3704.1.3.1),
+            SnpOid::Tee => oid!(1.3.6.1.4.1.3704.1.3.2),
+            SnpOid::Snp => oid!(1.3.6.1.4.1.3704.1.3.3),
+            SnpOid::Ucode => oid!(1.3.6.1.4.1.3704.1.3.8),
+            SnpOid::HwId => oid!(1.3.6.1.4.1.3704.1.4),
+            SnpOid::Fmc => oid!(1.3.6.1.4.1.3704.1.3.9),
+        }
+    }
+}
+
+#[derive(thiserror::Error, Debug, PartialEq)]
+pub enum CertificateValidationError {
+    #[error("ARK is not self signed")]
+    ArkNotSelfSigned,
+
+    #[error("ASK is not signed by ARK")]
+    AskNotSignedByArk,
+
+    #[error("VCEK is not signed by ASK")]
+    VcekNotSignedByAsk,
+
+    #[error("{0} verification failure: {1}")]
+    VerificationFailure(&'static str, String),
+}

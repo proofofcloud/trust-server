@@ -1,0 +1,3 @@
+[submodule "verifiers/intel"]
+	path = verifiers/intel
+	url = https://github.com/proofofcloud/attester.git

@@ -39,7 +39,7 @@ function loadSecrets() {
       state.whitelist = whitelistRaw
         .split(/\r?\n/)
         .map(line => line.trim())
-        .filter(line => line.length > 0 && !line.startsWith('#')) // Skip empty lines & comments
+        .filter(line => line.length > 0 && !line.startsWith('#'))
         .map(line => {
           const [id, label] = line.split(',');
           return { id: id.trim(), label: label ? label.trim() : 'unlabeled' };
@@ -75,8 +75,8 @@ function loadSecrets() {
 
 function runDcapCheck(hexQuote) {
   return new Promise((resolve, reject) => {
-    const args = ["run", "--rm", config.ATTESTER_IMAGE, "check", hexQuote];
-    const child = spawn("docker", args);
+    const args = ["check", hexQuote];
+    const child = spawn("attester", args);
 
     let stdout = "";
     let stderr = "";
@@ -86,12 +86,50 @@ function runDcapCheck(hexQuote) {
 
     child.on("close", (code) => {
       if (code !== 0) {
-        return reject(new Error(`DCAP tool failed (code ${code}): ${stderr}`));
+        return reject(new Error(`DCAP tool failed (code ${code}): ${stderr || stdout}`));
       }
       resolve(stdout);
     });
 
-    child.on("error", (err) => reject(err));
+    child.on("error", (err) => reject(new Error(`Failed to spawn ${ATTESTER_BIN}: ${err.message}`)));
+  });
+}
+
+function runSevSnpCheck(hexQuote) {
+  return new Promise((resolve, reject) => {
+    const args = ["validate", hexQuote];
+    const child = spawn("amd-verifier", args);
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (data) => (stdout += data));
+    child.stderr.on("data", (data) => (stderr += data));
+
+    child.on("close", (code) => {
+      try {
+        const result = JSON.parse(stdout);
+
+        if (result.result != "success") {
+            const errorMsg = result.message || stderr || "Unknown verification error";
+            return reject(new Error(`AMD Verifier rejected quote: ${errorMsg}`));
+        }
+
+        if (!result.chip_id) {
+            return reject(new Error("AMD Verifier success but 'chip_id' missing in response"));
+        }
+
+        resolve(result.chip_id);
+
+      } catch (e) {
+        if (code !== 0) {
+            return reject(new Error(`AMD Verifier failed (code ${code}): ${stderr || stdout}`));
+        }
+        return reject(new Error(`Invalid JSON output from AMD Verifier: ${e.message}`));
+      }
+    });
+
+    child.on("error", (err) => reject(new Error(`Failed to spawn ${AMD_VERIFIER_BIN}: ${err.message}`)));
   });
 }
 
@@ -102,16 +140,22 @@ async function processQuote(hexQuote) {
 
   const quoteHash = crypto.createHash("sha256").update(Buffer.from(hexQuote, "hex")).digest("hex");
 
-  const output = await runDcapCheck(hexQuote);
+  let machineIdHex;
+  
+  // TDX quotes are typically larger (> 4KB), SEV-SNP are smaller (~1KB)
+  if (hexQuote.length > 8000) { // Approx 4000 bytes * 2 hex chars
+      const output = await runDcapCheck(hexQuote);
+      const match = output.match(/PPID:\s*([0-9a-fA-F]+)/i);
+      if (!match) throw new Error("PPID not found in attestation output");
+      machineIdHex = match[1];
+  } else {
+      machineIdHex = await runSevSnpCheck(hexQuote);
+  }
 
-  const match = output.match(/PPID:\s*([0-9a-fA-F]+)/);
-  if (!match) throw new Error("PPID not found in attestation output");
-  const ppidHex = match[1];
-
-  const machineId = crypto.createHash("sha256").update(Buffer.from(ppidHex, "hex")).digest("hex");
+  const machineId = crypto.createHash("sha256").update(Buffer.from(machineIdHex, "hex")).digest("hex");
 
   const validNode = state.whitelist.find(entry => machineId.startsWith(entry.id));
-  
+   
   if (!validNode) {
     console.warn(`⛔ Access Denied: Machine ID ${machineId} is not in whitelist.`);
     throw new Error("Machine is not whitelisted.");
