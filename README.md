@@ -1,18 +1,22 @@
 # Confidential VM Quote Processing Server
 
-A Node.js web service for processing Intel SGX and TDX DCAP quotes, extracting platform identifiers, and generating JWT tokens for verified enclaves.
+A Node.js web service for processing Intel SGX/TDX and AMD SEV-SNP quotes. It validates remote attestation reports, extracts platform identifiers, and issues signed JWT tokens for verified confidential VMs.
 
 ## Overview
 
-This service validates SGX and TDX quotes, extracts the PPID (Platform Provisioning ID), checks against a whitelist, and returns a JWT token for authenticated enclaves. It's designed for Intel SGX and TDX attestation workflows.
+This service acts as a trust anchor for Confidential Computing workflows. It accepts raw hardware quotes (hex encoded), validates them using the appropriate internal tool (attester for Intel or amd-verifier for AMD), extracts a unique hardware identifier (Chip ID or PPID), checks it against a whitelist of verified providers, and returns a signed JWT.
 
 ## Features
 
-- **Quote Processing**: Validates SGX and TDX DCAP quotes in hexadecimal format
-- **PPID Extraction**: Extracts Platform Provisioning ID from quote data
-- **Machine ID Generation**: Creates unique machine identifiers from PPID
-- **Whitelist Verification**: Checks machine IDs against a whitelist taken from proofofcloud database of verified machines
-- **JWT Generation**: Issues RS256-signed JWT tokens for verified quotes
+* **Multi-Architecture Support**:
+    * **Intel SGX & TDX**: Validates DCAP quotes via Intel's QVL.
+    * **AMD SEV-SNP**: Validates attestation reports via amd-verifier.
+* **Automatic Detection**: Automatically determines the architecture based on the quote structure and length.
+* **Hardware Identity Extraction**:
+    * Extracts PPID (Platform Provisioning ID) for Intel quotes.
+    * Extracts Chip ID for AMD SEV-SNP reports.
+* **Whitelist Verification**: Checks hardware IDs against a strict whitelist of approved machines (sourced from the Proof of Cloud database).
+* **JWT Generation**: Issues RS256-signed JWT tokens containing the machine ID, label, and quote hash.
 
 ## API Endpoints
 
@@ -68,8 +72,7 @@ sudo docker run \
     -d \
     --rm \
     -p 8080:8080 \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    ghcr.io/proofofcloud/trust-server:sha-f0da9229689b0f6f44fb08ab20170e8f92f0f316
+    ghcr.io/proofofcloud/trust-server:sha-<sha_hash>
 ```
 
 The service will run on `http://localhost:8080`
