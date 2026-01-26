@@ -268,9 +268,9 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
         "--my-nonce",
         my_nonce_priv,
         "--message",
-        "aaccdd00223344",
+        hexQuote,
         "--partial-sigs",
-        JSON.stringify({ sigs: partial_sigs })
+        JSON.stringify({ sigs: safe_sigs })
       ];
       const output = await runSss(args);
       console.log(`sss output: ${output}`);
