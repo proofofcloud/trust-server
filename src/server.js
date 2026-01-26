@@ -13,10 +13,10 @@ const asyncHandler = (fn) => (req, res, next) => {
 };
 
 app.post("/get_jwt", asyncHandler(async (req, res) => {
-  const { quote } = req.body;
+  const { quote, nonces, partial_sigs } = req.body;
   if (!quote) return res.status(400).json({ error: "Missing 'quote'" });
 
-  const result = await processQuote(quote);
+  const result = await processQuote(quote, nonces, partial_sigs);
   res.json(result);
 }));
 
