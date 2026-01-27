@@ -28,37 +28,37 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    SssInfo,
-    SssInitialize(SssInitializeArgs),
-    SssInitialPubData(SssInitialPubDataArgs),
-    SssInitCommon(SssInitCommonArgs),
-    SssInitMyShare(SssInitMyShareArgs),
-    SssGetNonce,
-    SssSign(SssSignArgs),
-    SssAddNew(SssAddNewArgs),
-    SssInitNew(SssInitNewArgs),
+    Info,
+    Initialize(InitializeArgs),
+    InitialPubData(InitialPubDataArgs),
+    InitCommon(InitCommonArgs),
+    InitMyShare(InitMyShareArgs),
+    GetNonce,
+    Sign(SignArgs),
+    AddNew(AddNewArgs),
+    InitNew(InitNewArgs),
 }
 
 #[derive(Parser)]
-struct SssInitializeArgs {
+struct InitializeArgs {
     #[arg(long)]
     moniker: String,
 }
 
 #[derive(Parser)]
-struct SssInitialPubDataArgs {
+struct InitialPubDataArgs {
     #[arg(long)]
     m: usize,
 }
 
 #[derive(Parser)]
-struct SssInitCommonArgs {
+struct InitCommonArgs {
     #[arg(long)]
     pub_datas: String,
 }
 
 #[derive(Parser)]
-struct SssInitMyShareArgs {
+struct InitMyShareArgs {
     #[arg(long)]
     pub_datas: String,
     #[arg(long)]
@@ -66,7 +66,7 @@ struct SssInitMyShareArgs {
 }
 
 #[derive(Parser)]
-struct SssSignArgs {
+struct SignArgs {
     #[arg(long)]
     message: String,
     #[arg(long)]
@@ -78,7 +78,7 @@ struct SssSignArgs {
 }
 
 #[derive(Parser)]
-struct SssAddNewArgs {
+struct AddNewArgs {
     #[arg(long)]
     moniker: String,
     #[arg(long)]
@@ -88,7 +88,7 @@ struct SssAddNewArgs {
 }
 
 #[derive(Parser)]
-struct SssInitNewArgs {
+struct InitNewArgs {
     #[arg(long)]
     partial_shares: String,
 }
@@ -1194,7 +1194,7 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
 
-        Commands::SssInfo => {
+        Commands::Info => {
 
             match sss::State::load_private_only() {
                 Ok(mut state) => {
@@ -1229,14 +1229,14 @@ fn main() -> anyhow::Result<()> {
 
         }
 
-        Commands::SssInitialize(args) => {
+        Commands::Initialize(args) => {
 
             let state = sss::State::new(args.moniker);
             state.save_private()?;
 
         }
 
-        Commands::SssInitialPubData(args) => {
+        Commands::InitialPubData(args) => {
 
             let state = sss::State::load_private_only()?;
             let keys = state.generate_keys(args.m);
@@ -1248,7 +1248,7 @@ fn main() -> anyhow::Result<()> {
             println!("{json}");
         }
 
-        Commands::SssInitCommon(args) => {
+        Commands::InitCommon(args) => {
 
             let mut state = sss::State::load_private_only()?;
             let datas: HashMap<String, sss::InitPubData> = serde_json::from_str(&args.pub_datas).context("pub_data")?;
@@ -1263,7 +1263,7 @@ fn main() -> anyhow::Result<()> {
             println!("{json}");
         }
 
-        Commands::SssInitMyShare(args) => {
+        Commands::InitMyShare(args) => {
 
             let mut state = sss::State::load_full()?;
             let datas: HashMap<String, sss::InitPubData> = serde_json::from_str(&args.pub_datas).context("pub_data")?;
@@ -1273,7 +1273,7 @@ fn main() -> anyhow::Result<()> {
             state.save_private()?;
         }
 
-        Commands::SssGetNonce => {
+        Commands::GetNonce => {
             let mut rng = rand::rngs::OsRng;
             let sk = curve25519_dalek::scalar::Scalar::random(&mut rng);
             let pk = sk * &curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
@@ -1283,7 +1283,7 @@ fn main() -> anyhow::Result<()> {
 
         }
 
-        Commands::SssSign(args) => {
+        Commands::Sign(args) => {
             let state = sss::State::load_full()?;
 
             let msg = hex::decode(args.message)?;
@@ -1344,7 +1344,7 @@ fn main() -> anyhow::Result<()> {
 
         }
 
-        Commands::SssAddNew(args) => {
+        Commands::AddNew(args) => {
             let state = sss::State::load_full()?;
             let other_pk= BASE64.decode(args.pubkey)
                 .map_err(|_| anyhow::anyhow!("BASE64 decode failed"))
@@ -1361,7 +1361,7 @@ fn main() -> anyhow::Result<()> {
             println!("{json}");
         }
 
-        Commands::SssInitNew(args) => {
+        Commands::InitNew(args) => {
             let mut state = sss::State::load_full()?;
             if state.have_my_share() {
                 anyhow::bail!("Already have my share");

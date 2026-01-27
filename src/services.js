@@ -89,7 +89,7 @@ function loadSecrets_Multisig() {
 
   (async () => {
     try {
-      const output = await runSss(["sss-info"]);
+      const output = await runSss(["info"]);
       const match_moniker = output.match(/Moniker:\s*(\S+)/i);
       if (!match_moniker)
         throw new Error("Moniker not found in SSS tool output");
@@ -291,7 +291,7 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
       const signingInput_hex = Buffer.from(signingInput, "utf8").toString("hex");
 
       const args = [
-        "sss-sign",
+        "sign",
         "--pub-nonces",
         JSON.stringify(safe_nonces),
         "--my-nonce",
@@ -324,7 +324,7 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
     }
     else
     {
-      const output = await runSss(["sss-get-nonce"]);
+      const output = await runSss(["get-nonce"]);
 
       const nonce_priv = output.match(/nonce_priv\s*=\s*([A-Za-z0-9+/=]+)/)?.[1] || null;
       const nonce_pub  = output.match(/nonce_pub\s*=\s*([A-Za-z0-9+/=]+)/)?.[1] || null;
