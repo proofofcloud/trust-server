@@ -293,13 +293,13 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
       const args = [
         "sss-sign",
         "--pub-nonces",
-        JSON.stringify({ nonces: safe_nonces }),
+        JSON.stringify(safe_nonces),
         "--my-nonce",
         my_nonce_priv,
         "--message",
         signingInput_hex,
         "--partial-sigs",
-        JSON.stringify({ sigs: safe_sigs })
+        JSON.stringify(safe_sigs)
       ];
       const output = await runSss(args);
       //console.log(`sss output: ${output}`);
