@@ -2,27 +2,19 @@ extern crate aes_gcm;
 extern crate aes_siv;
 extern crate base64;
 extern crate clap;
-extern crate getrandom;
 extern crate hex;
 extern crate rand;
 extern crate sha2;
-extern crate x25519_dalek;
 extern crate curve25519_dalek;
 extern crate ed25519_dalek;
 extern crate serde;
 extern crate anyhow;
 
-use aes_gcm::{
-    aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce,
-};
-use aes_siv::siv::Aes128Siv;
+use aes_gcm::Aes256Gcm;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clap::{Parser, Subcommand};
 use curve25519_dalek::scalar::Scalar;
-use rand::RngCore;
 use std::convert::TryInto;
-use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 use anyhow::Context;
 
@@ -36,12 +28,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Rand(RandArgs),
-    GenerateKey(GenerateKeyArgs),
-    Encrypt(EncryptArgs),
-    Decrypt(EncryptArgs),
-    EncryptDstackEnv(EncryptDstackEnvArgs),
-    DecryptDstackEnv(DecryptDstackEnvArgs),
     SssInfo,
     SssInitialize(SssInitializeArgs),
     SssInitialPubData(SssInitialPubDataArgs),
@@ -51,44 +37,6 @@ enum Commands {
     SssSign(SssSignArgs),
     SssAddNew(SssAddNewArgs),
     SssInitNew(SssInitNewArgs),
-}
-
-#[derive(Parser)]
-struct RandArgs {
-    #[arg(short = 'n', long, default_value_t = 32)]
-    bytes: usize,
-}
-
-#[derive(Parser)]
-struct GenerateKeyArgs {
-    #[arg(short = 's', long)]
-    seed: String,
-}
-
-#[derive(Parser)]
-struct EncryptArgs {
-    #[arg(short = 's', long)]
-    seed: String,
-    #[arg(short = 'd', long)]
-    data: String,
-    #[arg(short = 'p', long)]
-    pubkey: String,
-}
-
-#[derive(Parser)]
-struct EncryptDstackEnvArgs {
-    #[arg(short = 'p', long)]
-    pubkey: String,
-    #[arg(short = 'd', long)]
-    data: String,
-}
-
-#[derive(Parser)]
-struct DecryptDstackEnvArgs {
-    #[arg(short = 'k', long)]
-    privkey: String,
-    #[arg(short = 'd', long)]
-    data: String,
 }
 
 #[derive(Parser)]
@@ -144,55 +92,6 @@ struct SssInitNewArgs {
     #[arg(long)]
     partial_shares: String,
 }
-
-fn generate_sk(seed: &String) -> x25519_dalek::StaticSecret {
-    let buf = match hex::decode(seed) {
-        Ok(buf) => buf,
-        Err(e) => {
-            panic!("bad key seed: {}", e);
-        }
-    };
-
-    let mut sha256 = sha2::Sha256::new();
-    sha256.update(buf);
-
-    let buf: [u8; 32] = sha256.finalize().into();
-    x25519_dalek::StaticSecret::from(buf)
-}
-
-fn sk_to_pk(sk: &x25519_dalek::StaticSecret) -> x25519_dalek::PublicKey {
-    x25519_dalek::PublicKey::from(sk)
-}
-
-fn read_pk(pubkey: &String) -> x25519_dalek::PublicKey {
-    match hex::decode(pubkey) {
-        Ok(d) => {
-            let arr: [u8; 32] = d.try_into().expect("wrong pubkey size");
-            x25519_dalek::PublicKey::from(arr)
-        }
-        Err(e) => {
-            panic!("bad pubkey: {}", e);
-        }
-    }
-}
-
-fn read_blob(data: &String) -> Vec<u8> {
-    match hex::decode(data) {
-        Ok(d) => d,
-        Err(e) => {
-            panic!("bad data: {}", e);
-        }
-    }
-}
-
-fn dh_get_key(args: &EncryptArgs) -> Aes128Siv {
-    let sk = generate_sk(&args.seed);
-    let pk = read_pk(&args.pubkey);
-
-    let shared_secret = sk.diffie_hellman(&pk);
-    Aes128Siv::new(shared_secret.to_bytes().into())
-}
-
 
 mod sss {
 
@@ -1294,101 +1193,6 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Rand(rand_args) => {
-            let mut data = vec![0u8; rand_args.bytes];
-            getrandom::getrandom(&mut data)
-                .map_err(|_| anyhow::anyhow!("getrandom failed"))?;
-
-            println!("{}", hex::encode(data));
-        }
-        Commands::GenerateKey(args) => {
-            let sk = generate_sk(&args.seed);
-            let pk = sk_to_pk(&sk);
-            println!("{}", hex::encode(pk.to_bytes()));
-        }
-        Commands::Encrypt(args) => {
-            let mut key = dh_get_key(&args);
-            let data = read_blob(&args.data);
-
-            let res = key.encrypt([&[]], &data)
-                .map_err(|_| anyhow::anyhow!("aes_encrypt failed"))?;
-
-            println!("{}", hex::encode(res));
-        }
-        Commands::Decrypt(args) => {
-            let mut key = dh_get_key(&args);
-            let data = read_blob(&args.data);
-
-            let res = key.decrypt([&[]], &data)
-                .map_err(|_| anyhow::anyhow!("aes_decrypt failed"))?;
-
-            println!("{}", hex::encode(res));
-        }
-
-        Commands::EncryptDstackEnv(args) => {
-            let peer_pk = read_pk(&args.pubkey);
-
-            let mut rng = rand::thread_rng();
-            let mut ephemeral_bytes = [0u8; 32];
-            rng.fill_bytes(&mut ephemeral_bytes);
-
-            let ephemeral_sk = x25519_dalek::StaticSecret::from(ephemeral_bytes);
-            let ephemeral_pk = x25519_dalek::PublicKey::from(&ephemeral_sk);
-
-            let shared_secret = ephemeral_sk.diffie_hellman(&peer_pk);
-
-            let key = aes_gcm::Key::<Aes256Gcm>::from_slice(shared_secret.as_bytes());
-            let cipher = Aes256Gcm::new(key);
-
-            let mut iv_bytes = [0u8; 12];
-            rng.fill_bytes(&mut iv_bytes);
-            let nonce = Nonce::from_slice(&iv_bytes);
-
-            let plaintext = args.data.as_bytes();
-            let ciphertext = cipher
-                .encrypt(nonce, plaintext)
-                .expect("encryption failure");
-
-            let mut final_blob = Vec::new();
-            final_blob.extend_from_slice(ephemeral_pk.as_bytes());
-            final_blob.extend_from_slice(&iv_bytes);
-            final_blob.extend_from_slice(&ciphertext);
-
-            println!("{}", BASE64.encode(final_blob));
-        }
-
-        Commands::DecryptDstackEnv(args) => {
-            let sk_bytes = hex::decode(&args.privkey).expect("bad private key hex");
-            let sk_arr: [u8; 32] = sk_bytes.try_into().expect("private key must be 32 bytes");
-            let my_sk = x25519_dalek::StaticSecret::from(sk_arr);
-
-            let blob = BASE64.decode(&args.data).expect("invalid base64 data");
-
-            if blob.len() < 32 + 12 {
-                panic!("Encrypted data too short");
-            }
-
-            let sender_pk_bytes: [u8; 32] = blob[0..32].try_into()?;
-            let iv_bytes: [u8; 12] = blob[32..44].try_into()?;
-            let ciphertext = &blob[44..];
-
-            let sender_pk = x25519_dalek::PublicKey::from(sender_pk_bytes);
-
-            let shared_secret = my_sk.diffie_hellman(&sender_pk);
-
-            let key = aes_gcm::Key::<Aes256Gcm>::from_slice(shared_secret.as_bytes());
-            let cipher = Aes256Gcm::new(key);
-            let nonce = Nonce::from_slice(&iv_bytes);
-
-            let plaintext = cipher
-                .decrypt(nonce, ciphertext)
-                .expect("decryption failed");
-
-            println!(
-                "{}",
-                String::from_utf8(plaintext).expect("decrypted data is not valid utf8")
-            );
-        }
 
         Commands::SssInfo => {
 
