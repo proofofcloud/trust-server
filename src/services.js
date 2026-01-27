@@ -90,14 +90,21 @@ function loadSecrets_Multisig() {
   (async () => {
     try {
       const output = await runSss(["sss-info"]);
-      const match = output.match(/Moniker:\s*(\S+)/i);
-      if (!match)
+      const match_moniker = output.match(/Moniker:\s*(\S+)/i);
+      if (!match_moniker)
         throw new Error("Moniker not found in SSS tool output");
 
-      const moniker = match[1];
+      const moniker = match_moniker[1];
       console.log(`Multisig Moniker: ${moniker}`);
-
       config.MULTISIG_MONIKER = moniker;
+
+      const match_pubkey = output.match(/Shared Pubkey\s*=\s*([0-9a-fA-F]+)/);
+      if (!match_pubkey)
+        throw new Error("Shared Pubkey not found in SSS tool output");
+
+      const pubkey = match_pubkey[1];      
+      console.log(`Multisig Pubkey: ${pubkey}`);
+      config.MULTISIG_PUBKEY = pubkey;
 
     } catch (e) {
       console.error(e);
@@ -208,6 +215,14 @@ function normalizeKvJson(inp) {
   return out;
 }
 
+function base64url(input) {
+  return Buffer.from(input)
+    .toString("base64")      // normal base64
+    .replace(/\+/g, "-")     // convert '+' → '-'
+    .replace(/\//g, "_")     // convert '/' → '_'
+    .replace(/=+$/g, "");    // remove trailing '='
+}
+
 async function processQuote(hexQuote, nonces, partial_sigs) {
   if (!/^[0-9a-fA-F]+$/.test(hexQuote)) {
     throw new Error("Invalid quote format: must be hex string");
@@ -242,6 +257,8 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
     label: validNode.label
   };
 
+  jwt_token = null;
+
   if (config.MULTISIG_MODE)
   {
     if (nonces)
@@ -261,6 +278,18 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
       if (partial_sigs)
         safe_sigs = normalizeKvJson(partial_sigs);
 
+      const header = { 
+        alg: "EdDSA",
+        typ: "JWT",
+        kid: config.MULTISIG_PUBKEY
+      };
+      
+
+      const header_b64  = base64url(Buffer.from(JSON.stringify(header), "utf8"));
+      const payload_b64 = base64url(Buffer.from(JSON.stringify(payload), "utf8"));
+      const signingInput = `${header_b64}.${payload_b64}`;
+      const signingInput_hex = Buffer.from(signingInput, "utf8").toString("hex");
+
       const args = [
         "sss-sign",
         "--pub-nonces",
@@ -268,12 +297,29 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
         "--my-nonce",
         my_nonce_priv,
         "--message",
-        hexQuote,
+        signingInput_hex,
         "--partial-sigs",
         JSON.stringify({ sigs: safe_sigs })
       ];
       const output = await runSss(args);
-      console.log(`sss output: ${output}`);
+      //console.log(`sss output: ${output}`);
+
+      const match_full_signature = output.match(/^\s*full_signature\s*:\s*([0-9a-fA-F]+)\s*$/m);
+      if (!match_full_signature)
+      {
+        const match_sigs = output.match(/^\s*sigs\s*=\s*(\{.*\})\s*$/m);
+        if (!match_sigs) {
+          throw new Error("SSS output missing sigs");
+        }
+
+        const sigs_obj = JSON.parse(match_sigs[1]);
+        return sigs_obj;
+      }
+
+      const full_signature = match_full_signature[1];
+      const sig_b64 = base64url(Buffer.from(full_signature, "hex"));
+
+      jwt_token = signingInput + "." + sig_b64;
 
     }
     else
@@ -304,17 +350,18 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
   }
   else
   {
-    const token = jwt.sign(payload, state.privateKey, {
+    jwt_token = jwt.sign(payload, state.privateKey, {
       algorithm: "RS256",
       header: { kid: state.keyId },
     });
-
-    return { 
-      machineId, 
-      label: validNode.label, 
-      jwt: token 
-    };
   }
+
+  return { 
+    machineId, 
+    label: validNode.label, 
+    jwt: jwt_token
+  };
+
 }
 
 async function verifyToken(hexQuote, token) {
