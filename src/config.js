@@ -5,6 +5,7 @@ module.exports = {
   PORT: process.env.PORT || 8080,
   
   PRIVATE_KEY_BASE64: process.env.PRIVATE_KEY_BASE64,
+  MULTISIG_MODE: process.env.MULTISIG_MODE === 'true',
 
   PATHS: {
     KEYS: path.join(__dirname, "keys.json"),
