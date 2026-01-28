@@ -49,9 +49,20 @@ COPY verifiers/intel .
 RUN . /opt/sgxsdk/environment && make
 
 # ==========================================
-# 3. Trust Server
+# 3. Build SSS Tool
 # ==========================================
-FROM ubuntu:22.04
+FROM rust:1.88-slim-bookworm AS sss-builder
+
+WORKDIR /build
+COPY sss-tool .
+
+WORKDIR /build/sss-tool
+RUN cargo build --release
+
+# ==========================================
+# 4. Trust Server
+# ==========================================
+FROM ubuntu:22.04 AS trust-server
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NODE_ENV=production
@@ -82,7 +93,10 @@ COPY verifiers/intel/sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
 # -- AMD --
 COPY --from=amd-builder /build/amd-verifier/target/release/amd-verifier /usr/local/bin/amd-verifier
 
-RUN chmod +x /usr/local/bin/attester /usr/local/bin/amd-verifier
+# -- SSS Tool --
+COPY --from=sss-builder /build/target/release/sss-tool /usr/local/bin/sss-tool
+
+RUN chmod +x /usr/local/bin/attester /usr/local/bin/amd-verifier /usr/local/bin/sss-tool
 
 COPY src/package*.json ./
 RUN npm ci

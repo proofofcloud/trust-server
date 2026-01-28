@@ -7,6 +7,9 @@ module.exports = {
   PRIVATE_KEY_BASE64: process.env.PRIVATE_KEY_BASE64,
   MULTISIG_MODE: process.env.MULTISIG_MODE === 'true',
 
+  SSS_TOOL: "sss-tool",
+  ATTESTER_BIN: "attester",
+
   PATHS: {
     KEYS: path.join(__dirname, "keys.json"),
     WHITELIST: path.join(__dirname, "whitelist.csv")
