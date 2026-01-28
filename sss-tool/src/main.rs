@@ -1,23 +1,22 @@
 extern crate aes_gcm;
 extern crate aes_siv;
+extern crate anyhow;
 extern crate base64;
 extern crate clap;
-extern crate hex;
-extern crate rand;
-extern crate sha2;
 extern crate curve25519_dalek;
 extern crate ed25519_dalek;
+extern crate hex;
+extern crate rand;
 extern crate serde;
-extern crate anyhow;
+extern crate sha2;
 
 use aes_gcm::Aes256Gcm;
+use anyhow::Context;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clap::{Parser, Subcommand};
 use curve25519_dalek::scalar::Scalar;
-use std::convert::TryInto;
 use std::collections::{HashMap, HashSet};
-use anyhow::Context;
-
+use std::convert::TryInto;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -106,23 +105,23 @@ mod sss {
     use curve25519_dalek::scalar::Scalar;
     use curve25519_dalek::traits::{Identity, IsIdentity};
 
-    use ed25519_dalek::Signer;
-    use Aes256Gcm;
-    use aes_gcm::KeyInit;
     use aes_gcm::aead::Aead;
+    use aes_gcm::KeyInit;
+    use ed25519_dalek::Signer;
     use std::convert::TryInto;
-    use std::io::{Write, Read};
     use std::fs::File;
+    use std::io::{Read, Write};
+    use Aes256Gcm;
     use HashMap;
 
-    use std::io::ErrorKind;
     use std::io::Error;
+    use std::io::ErrorKind;
 
     use ed25519_dalek::{PublicKey, Signature};
 
+    use serde::ser::SerializeMap;
     use serde::{Deserialize, Serialize};
     use serde::{Deserializer, Serializer};
-    use serde::ser::SerializeMap;
 
     use base64::engine::general_purpose;
     use base64::Engine;
@@ -131,16 +130,19 @@ mod sss {
         use super::*;
         use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-        pub fn serialize<S>(sigs: &Vec<Signature>, s: S) -> Result<S::Ok, S::Error>
+        pub fn serialize<S>(sigs: &[Signature], s: S) -> Result<S::Ok, S::Error>
         where
             S: Serializer,
         {
             // serialize Vec<Signature> as Vec<String> by reusing signature_b64
-            let encoded: Vec<String> = sigs.iter().map(|sig| {
-                // use a tiny internal serde roundtrip is overkill; just call the same logic:
-                // easiest: call to_bytes + base64 here, but to truly reuse, see Option 2.
-                base64::engine::general_purpose::STANDARD.encode(sig.to_bytes())
-            }).collect();
+            let encoded: Vec<String> = sigs
+                .iter()
+                .map(|sig| {
+                    // use a tiny internal serde roundtrip is overkill; just call the same logic:
+                    // easiest: call to_bytes + base64 here, but to truly reuse, see Option 2.
+                    base64::engine::general_purpose::STANDARD.encode(sig.to_bytes())
+                })
+                .collect();
 
             encoded.serialize(s)
         }
@@ -179,7 +181,7 @@ mod sss {
         use base64::engine::general_purpose;
         use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-        pub fn serialize<S>(v: &Vec<ed25519_dalek::PublicKey>, s: S) -> Result<S::Ok, S::Error>
+        pub fn serialize<S>(v: &[ed25519_dalek::PublicKey], s: S) -> Result<S::Ok, S::Error>
         where
             S: Serializer,
         {
@@ -210,8 +212,8 @@ mod sss {
                 let mut arr = [0u8; 32];
                 arr.copy_from_slice(&bytes);
 
-                let pk = ed25519_dalek::PublicKey::from_bytes(&arr)
-                    .map_err(serde::de::Error::custom)?;
+                let pk =
+                    ed25519_dalek::PublicKey::from_bytes(&arr).map_err(serde::de::Error::custom)?;
 
                 out.push(pk);
             }
@@ -222,7 +224,7 @@ mod sss {
 
     fn map_bytes_to_base64<S>(
         map: &HashMap<String, Vec<u8>>,
-        serializer: S
+        serializer: S,
     ) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -235,8 +237,7 @@ mod sss {
         }
 
         ser_map.end()
-    }    
-
+    }
 
     pub fn map_bytes_from_base64<'de, D>(
         deserializer: D,
@@ -313,21 +314,13 @@ mod sss {
         Scalar::from_bytes_mod_order_wide(&wide)
     }
 
-    pub fn dh_shared_secret(
-        my_scalar: &Scalar,
-        peer_pub: &EdwardsPoint,
-    ) -> [u8; 32]
-    {
+    pub fn dh_shared_secret(my_scalar: &Scalar, peer_pub: &EdwardsPoint) -> [u8; 32] {
         // assuming peer_pub already was validated (valid EC point)
         let shared = my_scalar * peer_pub;
         shared.compress().to_bytes()
     }
 
-    pub fn dh_symmetric_key(
-        my_scalar: &Scalar,
-        peer_pub: &EdwardsPoint,
-    ) -> Aes256Gcm
-    {
+    pub fn dh_symmetric_key(my_scalar: &Scalar, peer_pub: &EdwardsPoint) -> Aes256Gcm {
         // assuming peer_pub already was validated (valid EC point)
         let ikm = dh_shared_secret(my_scalar, peer_pub);
 
@@ -336,20 +329,19 @@ mod sss {
         Aes256Gcm::new(key)
     }
 
-
     pub fn dh_encrypt(
         my_scalar: &Scalar,
         peer_pub: &EdwardsPoint,
         plaintext: &[u8],
     ) -> anyhow::Result<Vec<u8>> {
-
         let cipher = dh_symmetric_key(my_scalar, peer_pub);
 
         let mut iv_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut iv_bytes);
         let nonce = aes_siv::aead::Nonce::from_slice(&iv_bytes);
 
-        let ciphertext = cipher.encrypt(nonce, plaintext)
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
             .map_err(|_| anyhow::anyhow!("aes_gcm encrypt failed")) // convert to anyhow::Error
             .context("dh_encrypt fail")?;
 
@@ -365,32 +357,32 @@ mod sss {
         peer_pub: &EdwardsPoint,
         final_blob: &[u8],
     ) -> anyhow::Result<Vec<u8>> {
-
         let cipher = dh_symmetric_key(my_scalar, peer_pub);
-    
-        let iv_bytes: [u8; 12] = final_blob.get(0..12).context("dh_decrypt iv missing")?.try_into().unwrap();
+
+        let iv_bytes: [u8; 12] = final_blob
+            .get(0..12)
+            .context("dh_decrypt iv missing")?
+            .try_into()
+            .unwrap();
 
         let ciphertext = &final_blob[12..];
 
         let nonce = aes_siv::aead::Nonce::from_slice(&iv_bytes);
-        cipher.decrypt(nonce, ciphertext)
+        cipher
+            .decrypt(nonce, ciphertext)
             .map_err(|_| anyhow::anyhow!("aes_gcm decrypt failed")) // convert to anyhow::Error
             .context("dh_decrypt fail")
     }
 
-
-    pub struct CommonState
-    {
+    pub struct CommonState {
         pub_coeffs: Vec<EdwardsPoint>,
     }
 
-    impl CommonState
-    {
+    impl CommonState {
         fn evaluate_at(&self, x: &Scalar) -> EdwardsPoint {
-            
             let mut x_pwr = *x;
             let mut res = self.pub_coeffs[0];
-            
+
             for j in 1..self.pub_coeffs.len() {
                 res += self.pub_coeffs[j] * x_pwr;
                 x_pwr *= x;
@@ -404,10 +396,13 @@ mod sss {
             if m == actual {
                 Ok(())
             } else {
-                Err(anyhow::anyhow!("incorrect quorum actual={}, expected={}", actual, m))
+                Err(anyhow::anyhow!(
+                    "incorrect quorum actual={}, expected={}",
+                    actual,
+                    m
+                ))
             }
         }
-
     }
 
     #[derive(Serialize, Deserialize)]
@@ -419,27 +414,25 @@ mod sss {
     }
 
     #[derive(Serialize, Deserialize)]
-    pub struct PartialShares (
-         #[serde(
-        serialize_with = "map_map_bytes_to_base64",
-        deserialize_with = "map_map_bytes_from_base64"
+    pub struct PartialShares(
+        #[serde(
+            serialize_with = "map_map_bytes_to_base64",
+            deserialize_with = "map_map_bytes_from_base64"
         )]
-        pub HashMap<String, HashMap<String, Vec<u8>>>
-    );    
+        pub HashMap<String, HashMap<String, Vec<u8>>>,
+    );
 
     #[derive(Serialize, Deserialize)]
-    pub struct StrVecMap (
-         #[serde(
-        serialize_with = "map_bytes_to_base64",
-        deserialize_with = "map_bytes_from_base64"
+    pub struct StrVecMap(
+        #[serde(
+            serialize_with = "map_bytes_to_base64",
+            deserialize_with = "map_bytes_from_base64"
         )]
         pub HashMap<String, Vec<u8>>,
-    );    
+    );
 
-    impl InitPubData
-    {
+    impl InitPubData {
         pub fn test(&self) -> anyhow::Result<()> {
-
             if self.pub_coeffs.len() != self.pops.len() {
                 return Err(anyhow::anyhow!("pub_coeffs and pops len do not match"));
             }
@@ -448,16 +441,15 @@ mod sss {
                 let pubkey = &self.pub_coeffs[i];
                 let pop = &self.pops[i];
 
-                pubkey.verify_strict(&[], &pop).context("PoP mismatch")?;
+                pubkey.verify_strict(&[], pop).context("PoP mismatch")?;
             }
 
             Ok(())
         }
     }
 
-    pub struct State
-    {
-        my_seed: [u8;32],
+    pub struct State {
+        my_seed: [u8; 32],
         pub my_moniker: String,
 
         shared: Option<CommonState>,
@@ -469,19 +461,17 @@ mod sss {
     const FILE_PRIVATE: &str = "private.sss";
     const FILE_SHARED: &str = "shared.sss";
 
-    impl State
-    {
+    impl State {
         pub fn new(moniker: String) -> State {
-            let mut seed = [0u8;32];
+            let mut seed = [0u8; 32];
             OsRng.fill_bytes(&mut seed);
-            
+
             State {
                 my_seed: seed,
                 my_moniker: moniker,
                 shared: None,
                 my_share: None,
             }
-            
         }
 
         pub fn have_my_share(&self) -> bool {
@@ -491,24 +481,23 @@ mod sss {
         fn get_common_state(&self) -> anyhow::Result<&CommonState> {
             match self.shared.as_ref() {
                 Some(sh) => Ok(sh),
-                None => Err(anyhow::anyhow!("no common state"))
+                None => Err(anyhow::anyhow!("no common state")),
             }
         }
 
         fn get_my_share(&self) -> anyhow::Result<&Scalar> {
             match &self.my_share {
                 Some(sk) => Ok(sk),
-                None => Err(anyhow::anyhow!("no my share"))
+                None => Err(anyhow::anyhow!("no my share")),
             }
         }
 
         pub fn get_pub_params(&self) -> anyhow::Result<(usize, [u8; 32])> {
             let sh = self.get_common_state()?;
-            Ok((sh.pub_coeffs.len(), sh.pub_coeffs[0].compress().as_bytes().clone()))
+            Ok((sh.pub_coeffs.len(), *sh.pub_coeffs[0].compress().as_bytes()))
         }
 
         pub fn save_private(&self) -> std::io::Result<()> {
-
             let mut writer = File::create(FILE_PRIVATE)?;
             writer.write_all(&SSS_DATA_VER.to_le_bytes())?;
 
@@ -516,8 +505,7 @@ mod sss {
 
             let moniker_b = self.my_moniker.as_bytes();
             writer.write_all(&moniker_b.len().to_le_bytes())?;
-            writer.write_all(&moniker_b)?;
-
+            writer.write_all(moniker_b)?;
 
             if let Some(sk) = self.my_share {
                 writer.write_all(&[1_u8])?;
@@ -530,7 +518,6 @@ mod sss {
         }
 
         pub fn save_shared(&self) -> std::io::Result<()> {
-
             let mut writer = File::create(FILE_SHARED)?;
             writer.write_all(&SSS_DATA_VER.to_le_bytes())?;
 
@@ -539,11 +526,10 @@ mod sss {
 
                 let m = sh.pub_coeffs.len();
                 writer.write_all(&m.to_le_bytes())?;
-                
+
                 for pt in sh.pub_coeffs.iter() {
                     writer.write_all(&pt.compress().to_bytes())?;
                 }
-
             } else {
                 writer.write_all(&[0_u8])?;
             }
@@ -568,15 +554,11 @@ mod sss {
 
             let ver = Self::read_u32(&mut reader)?;
             if SSS_DATA_VER != ver {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "unsupported ver",
-                ));
+                return Err(std::io::Error::other("unsupported ver"));
             }
 
             Ok(reader)
         }
-
 
         pub fn load_private_only() -> std::io::Result<State> {
             let mut reader = Self::load_preffix(FILE_PRIVATE)?;
@@ -598,26 +580,25 @@ mod sss {
                 let mut buf = [0_u8; 32];
                 reader.read_exact(&mut buf)?;
                 Some(Scalar::from_bytes_mod_order(buf))
-
             } else {
                 None
             };
-
 
             Ok(State {
                 my_seed: seed,
                 my_moniker: moniker,
                 shared: None,
-                my_share: my_share,
+                my_share,
             })
         }
 
         fn decode_point(buf: &[u8]) -> anyhow::Result<EdwardsPoint> {
-            curve25519_dalek::edwards::CompressedEdwardsY::from_slice(&buf).decompress().context("decoding EC point")
+            curve25519_dalek::edwards::CompressedEdwardsY::from_slice(buf)
+                .decompress()
+                .context("decoding EC point")
         }
 
         pub fn load_shared(&mut self) -> anyhow::Result<()> {
-
             let mut reader = Self::load_preffix(FILE_SHARED)?;
 
             let mut flag = [0_u8];
@@ -636,7 +617,6 @@ mod sss {
 
                     let pt = Self::decode_point(&buf)?;
                     shared.pub_coeffs.push(pt);
-
                 }
 
                 self.shared = Some(shared);
@@ -655,9 +635,9 @@ mod sss {
             let mut h = sha2::Sha256::new();
             h.update(b"init-key");
             h.update(self.my_seed);
-            h.update(&m.to_le_bytes());
-            h.update(&i.to_le_bytes());
-            let key_material: [u8;32] = h.finalize().into();
+            h.update(m.to_le_bytes());
+            h.update(i.to_le_bytes());
+            let key_material: [u8; 32] = h.finalize().into();
 
             ed25519_dalek::SecretKey::from_bytes(&key_material).unwrap()
         }
@@ -672,7 +652,7 @@ mod sss {
             // 3. Clamp per Ed25519 rules
             let mut a_bytes = [0u8; 32];
             a_bytes.copy_from_slice(&h[..32]);
-            a_bytes[0]  &= 248;
+            a_bytes[0] &= 248;
             a_bytes[31] &= 63;
             a_bytes[31] |= 64;
 
@@ -680,31 +660,27 @@ mod sss {
             Scalar::from_bytes_mod_order(a_bytes)
         }
 
-        pub fn generate_keys(&self, m: usize) -> InitPubData
-        {
+        pub fn generate_keys(&self, m: usize) -> InitPubData {
             let mut res = InitPubData {
                 pub_coeffs: Vec::new(),
                 pops: Vec::new(),
             };
 
             for i in 0..m {
-
                 let sk = self.generate_init_key_raw(m, i);
                 let pk = PublicKey::from(&sk);
                 let kp = ed25519_dalek::Keypair {
                     secret: sk,
-                    public: pk
+                    public: pk,
                 };
 
                 //println!("generated key: {}", hex::encode(kp.public.to_bytes()));
 
                 res.pub_coeffs.push(kp.public);
                 res.pops.push(kp.sign(&[]));
-
             }
 
             res
-
         }
 
         fn get_my_keys(&self, m: usize) -> Vec<Scalar> {
@@ -718,20 +694,18 @@ mod sss {
             sks
         }
 
-        fn calculate_partial_at(x: &Scalar, sks: &Vec<Scalar>) -> Scalar
-        {
+        fn calculate_partial_at(x: &Scalar, sks: &[Scalar]) -> Scalar {
             let mut x_pwr = *x;
             let mut res = sks[0];
-            
-            for j in 1..sks.len() {
-                res += sks[j] * x_pwr;
+
+            for item in sks.iter().skip(1) {
+                res += item * x_pwr;
                 x_pwr *= *x;
             }
             res
         }
 
-        pub fn get_x_raw(moniker: &str) -> Scalar
-        {
+        pub fn get_x_raw(moniker: &str) -> Scalar {
             let mut hasher = sha2::Sha256::new();
             hasher.update("actor-");
             hasher.update(moniker);
@@ -744,30 +718,30 @@ mod sss {
             Self::get_x_raw(&self.my_moniker)
         }
 
-        pub fn init_common(&mut self, all_datas: &HashMap<String, InitPubData>) -> anyhow::Result<HashMap<String, Vec<u8>>> {
-
-            if let None = all_datas.get(&self.my_moniker) {
+        pub fn init_common(
+            &mut self,
+            all_datas: &HashMap<String, InitPubData>,
+        ) -> anyhow::Result<HashMap<String, Vec<u8>>> {
+            if all_datas.get(&self.my_moniker).is_none() {
                 return Err(anyhow::anyhow!("I'm not in the quorum")); // I'm not a part of the quorum!
             }
 
             // determine m, ensure consistency
             let mut m: usize = 0;
             for (moniker, data) in all_datas.iter() {
-
                 (|| -> anyhow::Result<_> {
                     if m == 0 {
                         m = data.pub_coeffs.len();
                         if m == 0 {
                             anyhow::bail!("zero coeffs");
                         }
-                    } else {
-                        if data.pub_coeffs.len() != m {
-                            anyhow::bail!("wrong number of coeffs");
-                        }
+                    } else if data.pub_coeffs.len() != m {
+                        anyhow::bail!("wrong number of coeffs");
                     }
 
                     Ok::<(), anyhow::Error>(())
-                })().context(format!("from {}", moniker))?;
+                })()
+                .context(format!("from {}", moniker))?;
             }
 
             let sks = self.get_my_keys(m);
@@ -776,21 +750,18 @@ mod sss {
                 pub_coeffs: Vec::new(),
             };
 
-            for j in 0..m {
-                let pk = sks[j] * &ED25519_BASEPOINT_POINT;
+            for item in sks.iter().take(m) {
+                let pk = item * ED25519_BASEPOINT_POINT;
                 common.pub_coeffs.push(pk);
             }
 
             let mut res = HashMap::new();
 
             for (moniker, data) in all_datas.iter() {
-
                 (|| -> anyhow::Result<_> {
-                    
                     data.test()?;
 
                     if *moniker != self.my_moniker {
-
                         // add contribution
                         let mut peer_pk = None;
 
@@ -806,7 +777,6 @@ mod sss {
                         }
 
                         let encrypted_share = {
-                            
                             let x = Self::get_x_raw(moniker);
                             let partial_share = Self::calculate_partial_at(&x, &sks);
 
@@ -819,20 +789,20 @@ mod sss {
                     }
 
                     Ok(())
-
-                })().context(format!("from {}", moniker))?;
-
-
+                })()
+                .context(format!("from {}", moniker))?;
             }
 
             for j in 0..m {
                 let pk = &common.pub_coeffs[j];
-                println!("common coeff {}: {}", j, hex::encode(pk.compress().to_bytes()));
+                println!(
+                    "common coeff {}: {}",
+                    j,
+                    hex::encode(pk.compress().to_bytes())
+                );
             }
 
             self.shared = Some(common);
-
-
 
             Ok(res)
         }
@@ -840,21 +810,23 @@ mod sss {
         fn import_my_share_raw(&mut self, my_x: &Scalar, my_y: &Scalar) -> anyhow::Result<()> {
             // verify
             let sh = self.get_common_state()?;
-            let diff = sh.evaluate_at(&my_x) - my_y * &ED25519_BASEPOINT_POINT;
+            let diff = sh.evaluate_at(my_x) - my_y * ED25519_BASEPOINT_POINT;
             if !diff.is_identity() {
                 anyhow::bail!("my share verification failed");
             }
 
             self.my_share = Some(*my_y);
             Ok(())
-            
         }
 
-        pub fn import_shares(&mut self, all_datas: &HashMap<String, InitPubData>, all_partial_shares: &HashMap<String, HashMap<String, Vec<u8>>>) -> anyhow::Result<()> {
-
+        pub fn import_shares(
+            &mut self,
+            all_datas: &HashMap<String, InitPubData>,
+            all_partial_shares: &HashMap<String, HashMap<String, Vec<u8>>>,
+        ) -> anyhow::Result<()> {
             let sh = self.get_common_state()?;
             let m = sh.pub_coeffs.len();
-            
+
             let sks = self.get_my_keys(m);
             let my_x = self.get_x();
             let mut my_y = Self::calculate_partial_at(&my_x, &sks);
@@ -865,7 +837,6 @@ mod sss {
                 }
 
                 let share_for_me = (|| -> anyhow::Result<_> {
-
                     let partial_shares = match all_partial_shares.get(moniker) {
                         Some(x) => x,
                         None => {
@@ -883,23 +854,19 @@ mod sss {
                     let pk = Self::decode_point(&data.pub_coeffs[0].to_bytes())?;
                     let plaintext = dh_decrypt(&sks[0], &pk, my_share)?;
 
-                    let y_bytes: [u8;32] = plaintext.as_slice().try_into()?;
+                    let y_bytes: [u8; 32] = plaintext.as_slice().try_into()?;
 
                     Ok::<Scalar, anyhow::Error>(Scalar::from_bytes_mod_order(y_bytes))
-
-                })().context(format!("shares from {}", moniker))?;
-
+                })()
+                .context(format!("shares from {}", moniker))?;
 
                 my_y += share_for_me;
-
-
             }
 
             self.import_my_share_raw(&my_x, &my_y)
         }
 
-        fn get_coeff(&self, x: &Scalar, quorum: &HashSet<String>) -> anyhow::Result<Scalar>
-        {
+        fn get_coeff(&self, x: &Scalar, quorum: &HashSet<String>) -> anyhow::Result<Scalar> {
             let sh = self.get_common_state()?;
             sh.test_quorum_size(quorum.len())?;
 
@@ -926,51 +893,60 @@ mod sss {
             Ok(nom * denom.invert())
         }
 
-
-        fn get_partial_sig_ex(&self, x: &Scalar, total_nonce_bytes: &[u8;32], msg: &[u8], quorum: &HashSet<String>) -> anyhow::Result<Scalar>
-        {
+        fn get_partial_sig_ex(
+            &self,
+            x: &Scalar,
+            total_nonce_bytes: &[u8; 32],
+            msg: &[u8],
+            quorum: &HashSet<String>,
+        ) -> anyhow::Result<Scalar> {
             let my_sk = self.get_coeff(x, quorum)? * self.get_my_share()?;
-            
+
             let sh = self.get_common_state()?;
             let total_pubkey = sh.evaluate_at(x);
 
             let e = ed25519_challenge_scalar(
                 total_nonce_bytes,
                 &total_pubkey.compress().to_bytes(),
-                msg);
+                msg,
+            );
 
             Ok(my_sk * e)
         }
-    
-        pub fn get_partial_sig(&self, total_nonce_bytes: &[u8;32], msg: &[u8], quorum: &HashSet<String>) -> anyhow::Result<Scalar>
-        {
+
+        pub fn get_partial_sig(
+            &self,
+            total_nonce_bytes: &[u8; 32],
+            msg: &[u8],
+            quorum: &HashSet<String>,
+        ) -> anyhow::Result<Scalar> {
             self.get_partial_sig_ex(&Scalar::zero(), total_nonce_bytes, msg, quorum)
         }
 
-        pub fn get_total_nonce_and_quorum(pub_nonces: &HashMap<String, Vec<u8>>) -> anyhow::Result<([u8; 32], HashSet<String>)> {
+        pub fn get_total_nonce_and_quorum(
+            pub_nonces: &HashMap<String, Vec<u8>>,
+        ) -> anyhow::Result<([u8; 32], HashSet<String>)> {
             let mut total_nonce = EdwardsPoint::identity();
             let mut quorum = HashSet::new();
 
             for (moniker, nonce_bytes) in pub_nonces {
-
-                let pub_nonce = Self::decode_point(nonce_bytes).context(format!("nonce from {}", moniker))?;
+                let pub_nonce =
+                    Self::decode_point(nonce_bytes).context(format!("nonce from {}", moniker))?;
 
                 total_nonce += pub_nonce;
 
                 quorum.insert(moniker.clone());
-
             }
 
             let total_nonce_bytes: [u8; 32] = *total_nonce.compress().as_bytes();
 
             Ok((total_nonce_bytes, quorum))
-
         }
 
         fn get_ceremony_unique(sh: &CommonState, quorum_vec: &Vec<&String>) -> sha2::Sha256 {
             let mut h = sha2::Sha256::new();
             let m = sh.pub_coeffs.len();
-            h.update(&m.to_le_bytes());
+            h.update(m.to_le_bytes());
 
             for pt in sh.pub_coeffs.iter() {
                 h.update(pt.compress().as_bytes());
@@ -978,13 +954,16 @@ mod sss {
 
             for moniker in quorum_vec {
                 h.update(moniker.as_bytes());
-                h.update(&[0_u8]);
+                h.update([0_u8]);
             }
             h
         }
 
-        pub fn get_new_actor_partial_share_plain(&self, other_moniker: &str, quorum: &HashSet<String>) -> anyhow::Result<Scalar>
-        {
+        pub fn get_new_actor_partial_share_plain(
+            &self,
+            other_moniker: &str,
+            quorum: &HashSet<String>,
+        ) -> anyhow::Result<Scalar> {
             let sh = self.get_common_state()?;
             let my_share = self.get_my_share()?;
             let mut res = self.get_coeff(&Self::get_x_raw(other_moniker), quorum)? * my_share;
@@ -994,8 +973,7 @@ mod sss {
             let mut quorum_vec: Vec<&String> = quorum.iter().collect();
             quorum_vec.sort();
 
-            let ceremony_unique: [u8;32] = {
-
+            let ceremony_unique: [u8; 32] = {
                 let mut h = Self::get_ceremony_unique(sh, &quorum_vec);
                 h.update(other_moniker.as_bytes());
                 h.finalize().into()
@@ -1012,11 +990,13 @@ mod sss {
 
                     let mut h = sha2::Sha256::new();
                     h.update(b"mask-key");
-                    h.update(&ceremony_unique);
+                    h.update(ceremony_unique);
                     h.update(shared_secret);
-                    let key_material: [u8;32] = h.finalize().into();
+                    let key_material: [u8; 32] = h.finalize().into();
 
-                    let mut shared_scalar = Self::secret_key_to_scalar(&ed25519_dalek::SecretKey::from_bytes(&key_material).unwrap());
+                    let mut shared_scalar = Self::secret_key_to_scalar(
+                        &ed25519_dalek::SecretKey::from_bytes(&key_material).unwrap(),
+                    );
                     if found_self {
                         shared_scalar = -shared_scalar;
                     }
@@ -1024,12 +1004,16 @@ mod sss {
                     res += shared_scalar;
                 }
             }
-            
+
             Ok(res)
         }
 
-        pub fn get_new_actor_partial_share(&self, other_moniker: &str, other_pk: &[u8], quorum: &HashSet<String>) -> anyhow::Result<Vec<u8>>
-        {
+        pub fn get_new_actor_partial_share(
+            &self,
+            other_moniker: &str,
+            other_pk: &[u8],
+            quorum: &HashSet<String>,
+        ) -> anyhow::Result<Vec<u8>> {
             let plain = self.get_new_actor_partial_share_plain(other_moniker, quorum)?;
             let pk = Self::decode_point(other_pk).context("other actor key")?;
 
@@ -1042,39 +1026,36 @@ mod sss {
             Ok(PublicKey::from(&sk))
         }
 
-        pub fn import_new_actor_partial_shares(&mut self, encrypted_shares: &HashMap<String, Vec<u8>>) -> anyhow::Result<()> {
-
+        pub fn import_new_actor_partial_shares(
+            &mut self,
+            encrypted_shares: &HashMap<String, Vec<u8>>,
+        ) -> anyhow::Result<()> {
             let sh = self.get_common_state()?;
             sh.test_quorum_size(encrypted_shares.len())?;
 
             let sk = self.generate_init_key_raw(sh.pub_coeffs.len(), 0);
             let sc = Self::secret_key_to_scalar(&sk);
-            
+
             let mut my_y = Scalar::zero();
 
             for (moniker, encrypted_share) in encrypted_shares.iter() {
-
                 let decoded_share = (|| -> anyhow::Result<_> {
-
                     let peer_pubkey = sh.evaluate_at(&Self::get_x_raw(moniker));
                     let plaintext = dh_decrypt(&sc, &peer_pubkey, encrypted_share)?;
-                    let y_bytes: [u8;32] = plaintext.as_slice().try_into()?;
+                    let y_bytes: [u8; 32] = plaintext.as_slice().try_into()?;
                     Ok::<Scalar, anyhow::Error>(Scalar::from_bytes_mod_order(y_bytes))
-
-                })().context(format!("shares from {}", moniker))?;
+                })()
+                .context(format!("shares from {}", moniker))?;
 
                 my_y += decoded_share;
             }
 
             self.import_my_share_raw(&Self::get_x_raw(&self.my_moniker), &my_y)
-
         }
-
     }
 
     #[allow(dead_code)]
     pub fn test() {
-
         {
             let mut rng = OsRng;
 
@@ -1088,18 +1069,33 @@ mod sss {
             all_datas.insert(charlie.my_moniker.clone(), charlie.generate_keys(2));
 
             let mut all_partial_shares = HashMap::new();
-            all_partial_shares.insert(alice.my_moniker.clone(), alice.init_common(&all_datas).unwrap());
+            all_partial_shares.insert(
+                alice.my_moniker.clone(),
+                alice.init_common(&all_datas).unwrap(),
+            );
 
             all_partial_shares.insert(bob.my_moniker.clone(), bob.init_common(&all_datas).unwrap());
-            all_partial_shares.insert(charlie.my_moniker.clone(), charlie.init_common(&all_datas).unwrap());
+            all_partial_shares.insert(
+                charlie.my_moniker.clone(),
+                charlie.init_common(&all_datas).unwrap(),
+            );
 
-            alice.import_shares(&all_datas, &all_partial_shares).unwrap();
+            alice
+                .import_shares(&all_datas, &all_partial_shares)
+                .unwrap();
             bob.import_shares(&all_datas, &all_partial_shares).unwrap();
-            charlie.import_shares(&all_datas, &all_partial_shares).unwrap();
+            charlie
+                .import_shares(&all_datas, &all_partial_shares)
+                .unwrap();
 
             let msg = b"hello, world!";
 
-            let shared_pubkey = PublicKey::from_bytes(&alice.shared.as_ref().unwrap().pub_coeffs[0].compress().to_bytes()).unwrap();
+            let shared_pubkey = PublicKey::from_bytes(
+                &alice.shared.as_ref().unwrap().pub_coeffs[0]
+                    .compress()
+                    .to_bytes(),
+            )
+            .unwrap();
 
             // 1. A+B
             {
@@ -1110,32 +1106,30 @@ mod sss {
                 let n1 = Scalar::random(&mut rng);
                 let n2 = Scalar::random(&mut rng);
 
-                let total_nonce =
-                    n1 * &ED25519_BASEPOINT_POINT +
-                    n2 * &ED25519_BASEPOINT_POINT;
+                let total_nonce = n1 * ED25519_BASEPOINT_POINT + n2 * ED25519_BASEPOINT_POINT;
 
                 let nonce_bytes = total_nonce.compress().to_bytes();
-                  
-                let sig_k =
-                    n1 + n2 +
-                    alice.get_partial_sig(&nonce_bytes, msg, &quorum).unwrap() +
-                    bob.get_partial_sig(&nonce_bytes, msg, &quorum).unwrap();
+
+                let sig_k = n1
+                    + n2
+                    + alice.get_partial_sig(&nonce_bytes, msg, &quorum).unwrap()
+                    + bob.get_partial_sig(&nonce_bytes, msg, &quorum).unwrap();
 
                 let mut sig_bytes = [0u8; 64];
                 sig_bytes[..32].copy_from_slice(&nonce_bytes);
                 sig_bytes[32..].copy_from_slice(&sig_k.to_bytes());
 
-
                 // verify signature
                 let sig_obj = Signature::from_bytes(&sig_bytes).unwrap();
-                println!("A+B verify result: {:?}", shared_pubkey.verify_strict(msg, &sig_obj));
-
+                println!(
+                    "A+B verify result: {:?}",
+                    shared_pubkey.verify_strict(msg, &sig_obj)
+                );
             }
-
 
             let mut david = State::new("david".to_string());
             david.shared = alice.shared;
-            
+
             // 2. B+C
             {
                 let mut quorum = HashSet::new();
@@ -1145,60 +1139,57 @@ mod sss {
                 let n1 = Scalar::random(&mut rng);
                 let n2 = Scalar::random(&mut rng);
 
-                let total_nonce =
-                    n1 * &ED25519_BASEPOINT_POINT +
-                    n2 * &ED25519_BASEPOINT_POINT;
+                let total_nonce = n1 * ED25519_BASEPOINT_POINT + n2 * ED25519_BASEPOINT_POINT;
 
                 let nonce_bytes = total_nonce.compress().to_bytes();
-                  
-                let sig_k =
-                    n1 + n2 + 
-                    bob.get_partial_sig(&nonce_bytes, msg, &quorum).unwrap() +
-                    charlie.get_partial_sig(&nonce_bytes, msg, &quorum).unwrap();
+
+                let sig_k = n1
+                    + n2
+                    + bob.get_partial_sig(&nonce_bytes, msg, &quorum).unwrap()
+                    + charlie.get_partial_sig(&nonce_bytes, msg, &quorum).unwrap();
 
                 let mut sig_bytes = [0u8; 64];
                 sig_bytes[..32].copy_from_slice(&nonce_bytes);
                 sig_bytes[32..].copy_from_slice(&sig_k.to_bytes());
 
-
                 // verify signature
                 let sig_obj = Signature::from_bytes(&sig_bytes).unwrap();
-                println!("B+C verify result: {:?}", shared_pubkey.verify_strict(msg, &sig_obj));
+                println!(
+                    "B+C verify result: {:?}",
+                    shared_pubkey.verify_strict(msg, &sig_obj)
+                );
 
                 // add David
                 let pk_david = david.get_new_actor_pk().unwrap();
                 let pk_david_bytes = pk_david.as_bytes();
                 let mut all_shares = HashMap::new();
-                all_shares.insert(bob.my_moniker.clone(), bob.get_new_actor_partial_share(&david.my_moniker, pk_david_bytes, &quorum).unwrap());
-                all_shares.insert(charlie.my_moniker.clone(), charlie.get_new_actor_partial_share(&david.my_moniker, pk_david_bytes, &quorum).unwrap());
+                all_shares.insert(
+                    bob.my_moniker.clone(),
+                    bob.get_new_actor_partial_share(&david.my_moniker, pk_david_bytes, &quorum)
+                        .unwrap(),
+                );
+                all_shares.insert(
+                    charlie.my_moniker.clone(),
+                    charlie
+                        .get_new_actor_partial_share(&david.my_moniker, pk_david_bytes, &quorum)
+                        .unwrap(),
+                );
 
                 david.import_new_actor_partial_shares(&all_shares).unwrap();
-
             }
-
         }
-
-
     }
-
-
-
 }
 
-
 fn main() -> anyhow::Result<()> {
-
     //sss::test();
-    
+
     let cli = Cli::parse();
 
     match cli.command {
-
         Commands::Info => {
-
             match sss::State::load_private_only() {
                 Ok(mut state) => {
-
                     println!("Moniker: {}", state.my_moniker);
                     if state.load_shared().is_ok() {
                         println!("Initialization ceremony complete.");
@@ -1212,32 +1203,25 @@ fn main() -> anyhow::Result<()> {
                             println!("My share initialized");
                         } else {
                             println!("My share NOT initialized");
-                            println!("My public key: {}", BASE64.encode(state.get_new_actor_pk()?.as_bytes()));
-
+                            println!(
+                                "My public key: {}",
+                                BASE64.encode(state.get_new_actor_pk()?.as_bytes())
+                            );
                         }
-
-                    } else {
-
                     }
-
-
                 }
                 Err(_) => {
                     println!("Not initialized");
                 }
             };
-
         }
 
         Commands::Initialize(args) => {
-
             let state = sss::State::new(args.moniker);
             state.save_private()?;
-
         }
 
         Commands::InitialPubData(args) => {
-
             let state = sss::State::load_private_only()?;
             let keys = state.generate_keys(args.m);
 
@@ -1249,9 +1233,9 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::InitCommon(args) => {
-
             let mut state = sss::State::load_private_only()?;
-            let datas: HashMap<String, sss::InitPubData> = serde_json::from_str(&args.pub_datas).context("pub_data")?;
+            let datas: HashMap<String, sss::InitPubData> =
+                serde_json::from_str(&args.pub_datas).context("pub_data")?;
 
             let my_res = state.init_common(&datas)?;
             state.save_shared()?;
@@ -1264,10 +1248,11 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::InitMyShare(args) => {
-
             let mut state = sss::State::load_full()?;
-            let datas: HashMap<String, sss::InitPubData> = serde_json::from_str(&args.pub_datas).context("pub_data")?;
-            let partial_shares: sss::PartialShares = serde_json::from_str(&args.partial_shares).context("partial_shares")?;
+            let datas: HashMap<String, sss::InitPubData> =
+                serde_json::from_str(&args.pub_datas).context("pub_data")?;
+            let partial_shares: sss::PartialShares =
+                serde_json::from_str(&args.partial_shares).context("partial_shares")?;
 
             state.import_shares(&datas, &partial_shares.0)?;
             state.save_private()?;
@@ -1276,45 +1261,46 @@ fn main() -> anyhow::Result<()> {
         Commands::GetNonce => {
             let mut rng = rand::rngs::OsRng;
             let sk = curve25519_dalek::scalar::Scalar::random(&mut rng);
-            let pk = sk * &curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+            let pk = sk * curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 
             println!("nonce_priv = {}", BASE64.encode(sk.as_bytes()));
             println!("nonce_pub = {}", BASE64.encode(pk.compress().as_bytes()));
-
         }
 
         Commands::Sign(args) => {
             let state = sss::State::load_full()?;
 
             let msg = hex::decode(args.message)?;
-            let pub_nonces_obj: sss::StrVecMap = serde_json::from_str(&args.pub_nonces).context("pub_nonces")?;
+            let pub_nonces_obj: sss::StrVecMap =
+                serde_json::from_str(&args.pub_nonces).context("pub_nonces")?;
             let pub_nonces = pub_nonces_obj.0;
-            let mut partial_sigs: sss::StrVecMap = serde_json::from_str(&args.partial_sigs).context("partial_sigs")?;
+            let mut partial_sigs: sss::StrVecMap =
+                serde_json::from_str(&args.partial_sigs).context("partial_sigs")?;
 
             let (total_nonce_bytes, quorum) = sss::State::get_total_nonce_and_quorum(&pub_nonces)?;
 
-
             if partial_sigs.0.contains_key(&state.my_moniker) {
                 println!("already included");
-            } else
-            {
+            } else {
                 let mut res = state.get_partial_sig(&total_nonce_bytes, &msg, &quorum)?;
 
-                let my_nonce: [u8; 32] = BASE64.decode(args.my_nonce)
+                let my_nonce: [u8; 32] = BASE64
+                    .decode(args.my_nonce)
                     .map_err(|_| anyhow::anyhow!("BASE64 decode failed"))?
-                    .as_slice().try_into()?;
+                    .as_slice()
+                    .try_into()?;
 
                 res += Scalar::from_bytes_mod_order(my_nonce);
 
-                partial_sigs.0.insert(state.my_moniker.clone(), res.as_bytes().to_vec());
-
+                partial_sigs
+                    .0
+                    .insert(state.my_moniker.clone(), res.as_bytes().to_vec());
 
                 let json = serde_json::to_string(&partial_sigs)?;
                 println!("sigs = {}", json);
             }
 
             if partial_sigs.0.len() == pub_nonces.len() {
-
                 // assemble and check the signature
                 let mut sig_k = Scalar::zero();
 
@@ -1322,16 +1308,16 @@ fn main() -> anyhow::Result<()> {
                     let sk_bytes: [u8; 32] = sk_vec.as_slice().try_into()?;
                     sig_k += Scalar::from_bytes_mod_order(sk_bytes);
                 }
-                
+
                 let mut sig_bytes = [0u8; 64];
                 sig_bytes[..32].copy_from_slice(&total_nonce_bytes);
                 sig_bytes[32..].copy_from_slice(&sig_k.to_bytes());
 
-
                 // verify signature
                 let sig_obj = ed25519_dalek::Signature::from_bytes(sig_bytes.as_slice())?;
 
-                let shared_pubkey = ed25519_dalek::PublicKey::from_bytes(&state.get_pub_params()?.1)?;
+                let shared_pubkey =
+                    ed25519_dalek::PublicKey::from_bytes(&state.get_pub_params()?.1)?;
                 let verify_result = shared_pubkey.verify_strict(&msg, &sig_obj);
 
                 if let Err(e) = verify_result {
@@ -1339,20 +1325,20 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     println!("full_signature: {}", hex::encode(sig_bytes));
                 }
-
             }
-
         }
 
         Commands::AddNew(args) => {
             let state = sss::State::load_full()?;
-            let other_pk= BASE64.decode(args.pubkey)
+            let other_pk = BASE64
+                .decode(args.pubkey)
                 .map_err(|_| anyhow::anyhow!("BASE64 decode failed"))
                 .context("pubkey")?;
 
             let quorum: HashSet<String> = serde_json::from_str(&args.quorum).context("quorum")?;
 
-            let encrypted_share = state.get_new_actor_partial_share(&args.moniker, &other_pk, &quorum)?;
+            let encrypted_share =
+                state.get_new_actor_partial_share(&args.moniker, &other_pk, &quorum)?;
 
             let mut map = HashMap::new();
             map.insert(state.my_moniker, BASE64.encode(encrypted_share));
@@ -1367,13 +1353,12 @@ fn main() -> anyhow::Result<()> {
                 anyhow::bail!("Already have my share");
             }
 
-            let partial_shares: sss::StrVecMap = serde_json::from_str(&args.partial_shares).context("partial_shares")?;
+            let partial_shares: sss::StrVecMap =
+                serde_json::from_str(&args.partial_shares).context("partial_shares")?;
             state.import_new_actor_partial_shares(&partial_shares.0)?;
 
             state.save_private()?;
-
         }
-
     }
 
     Ok(())
