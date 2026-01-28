@@ -10,6 +10,12 @@ const state = {
   keyRegistry: {},
   whitelist: [],
   keyId: null,
+  multisig: {
+    moniker: null,
+    sharedPublicKey: null,
+    nonceMap: {},
+    nonceList: [],
+  },
 };
 
 function execCommand(command, args) {
@@ -115,22 +121,22 @@ function loadSecrets_SingleSigner() {
 }
 
 async function loadSecrets_Multisig() {
-  config.MULTISIG_NONCE_MAP = {}; // key → value
-  config.MULTISIG_NONCE_LIST = []; // FIFO list of keys
+  state.multisig.nonceMap = {}; // key → value
+  state.multisig.nonceList = []; // FIFO list of keys
 
   try {
     const output = await runSss(["info"]);
 
     const match_moniker = output.match(/Moniker:\s*(\S+)/i);
     if (!match_moniker) throw new Error("Moniker not found in SSS tool output");
-    config.MULTISIG_MONIKER = match_moniker[1];
-    console.log(`Multisig Moniker: ${config.MULTISIG_MONIKER}`);
+    state.multisig.moniker = match_moniker[1];
+    console.log(`Multisig Moniker: ${state.multisig.moniker}`);
 
     const match_pubkey = output.match(/Shared Pubkey\s*=\s*([0-9a-fA-F]+)/);
     if (!match_pubkey)
       throw new Error("Shared Pubkey not found in SSS tool output");
-    config.MULTISIG_PUBKEY = match_pubkey[1];
-    console.log(`Multisig Pubkey: ${config.MULTISIG_PUBKEY}`);
+    state.multisig.sharedPublicKey = match_pubkey[1];
+    console.log(`Multisig Pubkey: ${state.multisig.sharedPublicKey}`);
   } catch (e) {
     throw new Error(`Multisig init failed: ${e.message}`);
   }
@@ -146,7 +152,7 @@ function runDcapCheck(hexQuote) {
 
 async function runSevSnpCheck(hexQuote) {
   try {
-    const stdout = await execCommand(CONFIG.AMD_VERIFIER, [
+    const stdout = await execCommand(config.AMD_VERIFIER, [
       "validate",
       hexQuote,
     ]);
@@ -234,13 +240,13 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
   if (config.MULTISIG_MODE) {
     if (nonces) {
       const safe_nonces = normalizeKvJson(nonces);
-      const my_nonce_pub = safe_nonces[config.MULTISIG_MONIKER] || null;
+      const my_nonce_pub = safe_nonces[state.multisig.moniker] || null;
       if (!my_nonce_pub) throw new Error("my nonce not included");
 
-      const my_nonce_priv = config.MULTISIG_NONCE_MAP[my_nonce_pub];
+      const my_nonce_priv = state.multisig.nonceMap[my_nonce_pub];
       if (!my_nonce_priv) throw new Error("my nonce not found");
 
-      delete config.MULTISIG_NONCE_MAP[my_nonce_pub]; // important!
+      delete state.multisig.nonceMap[my_nonce_pub]; // important!
 
       let safe_sigs = {};
       if (partial_sigs) safe_sigs = normalizeKvJson(partial_sigs);
@@ -248,7 +254,7 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
       const header = {
         alg: "EdDSA",
         typ: "JWT",
-        kid: config.MULTISIG_PUBKEY,
+        kid: state.multisig.sharedPublicKey,
       };
 
       const header_b64 = base64url(Buffer.from(JSON.stringify(header), "utf8"));
@@ -295,15 +301,15 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
 
       if (!nonce_priv || !nonce_pub) throw new Error("failed to get nonce");
 
-      if (config.MULTISIG_NONCE_LIST.length > 20) {
-        const key = config.MULTISIG_NONCE_LIST.shift();  // pop_front
-        delete config.MULTISIG_NONCE_MAP[key];           // remove from map
+      if (state.multisig.nonceList.length > 20) {
+        const key = state.multisig.nonceList.shift(); // pop_front
+        delete state.multisig.nonceMap[key]; // remove from map
       }
 
-      config.MULTISIG_NONCE_LIST.push(nonce_pub);
-      config.MULTISIG_NONCE_MAP[nonce_pub] = nonce_priv;
+      state.multisig.nonceList.push(nonce_pub);
+      state.multisig.nonceMap[nonce_pub] = nonce_priv;
 
-      return { machineId, moniker: config.MULTISIG_MONIKER, nonce: nonce_pub };
+      return { machineId, moniker: state.multisig.moniker, nonce: nonce_pub };
     }
   } else {
     jwt_token = jwt.sign(payload, state.privateKey, {
