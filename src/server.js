@@ -1,4 +1,7 @@
 const express = require("express");
+const fs = require("fs");
+const https = require("https");
+const http = require("http");
 const config = require("./config");
 const { loadSecrets, processQuote, verifyToken } = require("./services");
 
@@ -46,9 +49,27 @@ app.get("/", (_, res) => res.send("SGX DCAP Web Service Ready"));
 async function startServer() {
   console.log("Initializing Trust Server...");
   await loadSecrets();
-  app.listen(config.PORT, () => {
-    console.log(`Listening on http://localhost:${config.PORT}`);
-  });
+
+  if (config.HTTPS_ENABLED) {
+    if (!config.HTTPS_KEY_PATH || !config.HTTPS_CERT_PATH) {
+      throw new Error(
+        "HTTPS_KEY_PATH and HTTPS_CERT_PATH must be set when HTTPS_ENABLED is true.",
+      );
+    }
+
+    const options = {
+      key: fs.readFileSync(config.HTTPS_KEY_PATH),
+      cert: fs.readFileSync(config.HTTPS_CERT_PATH),
+    };
+
+    https.createServer(options, app).listen(config.PORT, () => {
+      console.log(`Server listening on https://localhost:${config.PORT}`);
+    });
+  } else {
+    http.createServer(app).listen(config.PORT, () => {
+      console.log(`Server listening on http://localhost:${config.PORT}`);
+    });
+  }
 }
 
 startServer().catch((err) => {
