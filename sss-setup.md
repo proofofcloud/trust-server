@@ -19,7 +19,7 @@ Every participant must first initialize their local environment and identity.
 sss-tool initialize --moniker "<your_participant_name>"
 
 # Example:
-sss-tool initialize --moniker "scrt_labs"
+sss-tool initialize --moniker "alice"
 
 ```
 
