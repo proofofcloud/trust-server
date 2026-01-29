@@ -40,7 +40,7 @@ sss-tool initial-pub-data --m 3
 ```
 Output: Generates a Commitment json.
 
-Action: Share this commitment with all other participants. Once all N participants generated and shared their DKG commitments, they all should be united into a single json.
+Action: Share this commitment with all other participants. Once all N participants generated and shared their DKG commitments, all the commitments should be united into a single json.
 Like this:
 ```
 {"alice":{ ... }, "bob":{ ... }, ... }
@@ -54,18 +54,18 @@ sss-tool init-common --pub-datas '{...}'
 # where '{...}' is the json that contains all the initial commitments (as described in the previous step).
 ```
 
-Output: Generates a local configuration file `shares.sss`, and prints the json with encrypted partial shares to all other participants. Example:
+Output: Generates a local configuration file `shares.sss`, and prints out the json with encrypted partial shares to all other participants. Example:
 ```
 {"alice":{"bob": "xxxx", "charlie": "xxxxx", ...}}
 ```
 
-Action: Share this output with all other participants. Once all N participants generated and shared their partial shares, they all should be united into a single json. Like this:|
+Action: Share this output with all other participants. Once all N participants generated and shared their partial shares, all partial shares should be united into a single json. Like this:|
 ```
 {"alice":{"bob": "xxxx", "charlie": "xxxxx", ...}, "bob":{"alice": "xxxx", ....}, "charlie": {...}, ...}
 ```
 
 ### 4. Finalize and Save Share (Round 3)
-After creating the unified json of all partial shares
+After creating the unified json of all partial shares:
 
 ```
 sss-tool init-my-share --shares pub-datas '{...}' --partial-shares '{...}'
@@ -73,10 +73,9 @@ sss-tool init-my-share --shares pub-datas '{...}' --partial-shares '{...}'
 
 Output: Updates the local `private.sss` file. Decodes, verifies and saves the imported share.
 
-**CRITICAL**: This file is your unique private share.
-Backup: Store it securely offline.
+**CRITICAL**: This file is your unique private share, and thus must be stored securely.
 
-### 5. Publish Public Information
+### 5. Publish your Public Information
 ```
 sss-tool info
 ```
@@ -90,6 +89,9 @@ Shared Pubkey = 3c855110850b4e303e640b0c3c06bedd5b6d3b3526b46f7a0ef10ab2e8c38aaa
 My share initialized
 ```
 
-The share Pubkey should be published.
-Peers List: Update the list of available peers at: https://github.com/proofofcloud/trust-server/blob/main/public_info/peers_list.txt
+The Shared Pubkey is exactly the same for all participants.
+
+The Shared Pubkey should be made public at https://github.com/proofofcloud/trust-server/blob/main/public_info/public_key.txt for the verifiers to check the JWT token signatures.
+
+In addition, the trust-server instances run by the participants should be listed at https://github.com/proofofcloud/trust-server/blob/main/public_info/peers_list.txt
 
