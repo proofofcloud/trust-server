@@ -51,6 +51,8 @@ Like this:
 ```
 sss-tool init-common --pub-datas '{...}'
 
+(Note the single quotes)
+
 # where '{...}' is the json that contains all the initial commitments (as described in the previous step).
 ```
 
