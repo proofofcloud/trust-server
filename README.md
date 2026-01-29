@@ -27,7 +27,9 @@ Processes an SGX or TDX quote and returns verification results.
 **Request Body:**
 ```json
 {
-  "quote": "hex_encoded_sgx_or_tdx_quote"
+  "quote": "hex_encoded_sgx_or_tdx_quote",
+  "nonces": ["..."],      // Optional: Required if MULTISIG_MODE is true
+  "partial_sigs": ["..."] // Optional: Required if MULTISIG_MODE is true
 }
 ```
 
@@ -36,7 +38,7 @@ Processes an SGX or TDX quote and returns verification results.
 {
   "machineId": "truncated_sha256_of_ppid", 
   "label": "machine label",
-  "jwt": "rs256_signed_jwt_token"
+  "jwt": "rs256_signed_jwt_token"  // OR partial signature data in Multisig Mode
 }
 ```
 
@@ -67,6 +69,8 @@ Health check endpoint that returns service status.
 
 ## How to run
 
+### Standard (Single Sig, HTTP)
+
 ```
 sudo docker run \
     -d \
@@ -75,4 +79,34 @@ sudo docker run \
     ghcr.io/proofofcloud/trust-server:sha-<sha_hash>
 ```
 
-The service will run on `http://localhost:8080`
+### Secure Mode (Single Sig, HTTPS)
+
+To run in production with HTTPS, you must mount your certificates into the container and set the environment variables.
+
+1. **Prepare Certificates**: Ensure you have your `privkey.pem` and `fullchain.pem`.
+2. **Run Container**:
+
+```
+sudo docker run \
+    -d \
+    --rm \
+    -p 443:8080 \
+    -e HTTPS_ENABLED=true \
+    -e HTTPS_KEY_PATH=/certs/privkey.pem \
+    -e HTTPS_CERT_PATH=/certs/fullchain.pem \
+    -v /path/to/your/certs:/certs:ro \
+    ghcr.io/proofofcloud/trust-server:sha-<sha_hash>
+```
+
+### Multisig Mode
+
+To run in Multisig mode (with or without HTTPS), add the `MULTISIG_MODE` environment variable.
+
+```
+sudo docker run \
+    -d \
+    --rm \
+    -p 8080:8080 \
+    -e MULTISIG_MODE=true \
+    ghcr.io/proofofcloud/trust-server:sha-<sha_hash>
+```
