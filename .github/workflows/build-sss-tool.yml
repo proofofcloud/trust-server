@@ -1,0 +1,54 @@
+name: Build SSS Tool
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: sss-tool
+            asset_name: sss-tool-linux-amd64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: sss-tool
+            asset_name: sss-tool-macos-amd64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: sss-tool.exe
+            asset_name: sss-tool-windows-amd64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build Binary
+        working-directory: ./sss-tool
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename Binary
+        shell: bash
+        run: |
+          cd sss-tool/target/${{ matrix.target }}/release
+          mv ${{ matrix.artifact_name }} ../../../${{ matrix.asset_name }}
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: sss-tool/${{ matrix.asset_name }}
