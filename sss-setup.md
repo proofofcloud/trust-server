@@ -15,86 +15,81 @@ This phase establishes the initial group of N participants and the threshold M.
 ### 1. Initialize Participant
 Every participant must first initialize their local environment and identity.
 
-Bash
+```
 sss-tool initialize --moniker "<your_participant_name>"
-Example: sss-tool initialize --moniker "scrt_labs"
 
-Output: Generates a local configuration (likely config.toml or similar) and identity files.
+# Example:
+sss-tool initialize --moniker "alice"
+
+```
+
+Output: Generates a local configuration file `private.sss`.
 
 ### 2. Generate DKG Commitments (Round 1)
 Participants generate their initial commitments for the Distributed Key Generation (DKG) process.
 
-Bash
- <t> is the threshold M
-<n> is the total number of participants N
-sss-tool dkg-round1 --threshold <t> --participants <n>
-Output: Generates a Commitment file/string.
+```
+<m> is the threshold, i.e. the quorum size that will be able to reconstruct the full key
+sss-tool initial-pub-data --m <m>
 
-Action: Share this commitment with all other participants.
+# Example:
+sss-tool initial-pub-data --m 3
 
-### 3. Generate Shares (Round 2)
-Once you have received commitments from all other participants, use them to generate the private shares.
+# output:
+{"alice":{"pub_coeffs":["d2KrWUHLSOMA2NueXt8kLNiy7c6s2y2oSmGPMRnilBA=","LFdaFEP/zXG7a+4UO7/e1O7Rf2s4REkjMiFlJsKUOVY=","hcVbw+HnrzmSEIjbunKVskILzV6DwCz48vecyjfZvfc="],"pops":["+ITsY7oKPDcn34Ttsg0G2JX+OK69R2j6pI8/Wd7Edw5up3QfmGS9vk3dwnzh5p3XEsxMJAEEIgCuYA+bb9xeDA==","73gyloapp9KPSKZcPayOVT7kNRNiFMMsg1EVzdXqQFcIthcw9W7um4pJjN3a8U0oZwKgvJ3ZFWzbqwHiiPv+CA==","KucX3lvCMwmX0wsBmsvZE/uaHO1DWVfcKV9hXL2c27f0SYJSuvqQ+NteEsLpiSV+nYkleIjczUFz1f1kdAcFBQ=="]}}
+```
+Output: Generates a Commitment json.
 
-Bash
-# This command typically takes the list of commitments from peers
-sss-tool dkg-round2 --commitments <path_to_commitments_file_or_list>
-Output:
+Action: Share this commitment with all other participants. Once all N participants generated and shared their DKG commitments, they all should be united into a single json.
+Like this:
+```
+{"alice":{ ... }, "bob":{ ... }, ... }
+```
 
-trustserver_public_key.pub: The collective public key.
+### 3. Import all DKG Commitments and Generate encrypted partial Shares (Round 2)
 
-Encrypted Shares: Files specifically encrypted for each peer.
+```
+sss-tool init-common --pub-datas '{...}'
 
-Action: Send the respective Encrypted Share to each corresponding participant.
+# where '{...}' is the json that contains all the initial commitments (as described in the previous step).
+```
+
+Output: Generates a local configuration file `shares.sss`, and prints the json with encrypted partial shares to all other participants. Example:
+```
+{"alice":{"bob": "xxxx", "charlie": "xxxxx", ...}}
+```
+
+Action: Share this output with all other participants. Once all N participants generated and shared their partial shares, they all should be united into a single json. Like this:|
+```
+{"alice":{"bob": "xxxx", "charlie": "xxxxx", ...}, "bob":{"alice": "xxxx", ....}, "charlie": {...}, ...}
+```
 
 ### 4. Finalize and Save Share (Round 3)
-After receiving the encrypted shares from all other participants, import them to finalize your secret share.
+After creating the unified json of all partial shares
 
-Bash
-sss-tool dkg-finalize --shares <path_to_received_shares>
-Output: trustserver_share.json (or .key)
+```
+sss-tool init-my-share --shares pub-datas '{...}' --partial-shares '{...}'
+```
 
-CRITICAL: This file is your unique private share.
+Output: Updates the local `private.sss` file. Decodes, verifies and saves the imported share.
 
+**CRITICAL**: This file is your unique private share.
 Backup: Store it securely offline.
 
-Install: Place it in the config directory of your Trust-Server installation.
+### 5. Publish Public Information
+```
+sss-tool info
+```
 
-5. Publish Public Information
-To complete the setup, public artifacts must be committed to the repository:
+This should print the initialization status. Output should be like this:
+```
+Moniker: alice
+Initialization ceremony complete.
+M = 2
+Shared Pubkey = 3c855110850b4e303e640b0c3c06bedd5b6d3b3526b46f7a0ef10ab2e8c38aaa
+My share initialized
+```
 
-Public Key: Copy the contents of the public key file to: https://github.com/proofofcloud/trust-server/blob/main/public_info/public_key.txt
-
+The share Pubkey should be published.
 Peers List: Update the list of available peers at: https://github.com/proofofcloud/trust-server/blob/main/public_info/peers_list.txt
 
-Phase 2: Adding a New Participant
-Adding a new participant requires a quorum of at least M existing participants to sign off on the addition.
-
-Step 1: New Participant Setup
-The new participant initializes and generates a request to join.
-
-Bash
-sss-tool initialize --moniker "<new_participant_name>"
-sss-tool join-request
-Output: A "Join Request" (containing an ephemeral public key).
-
-Action: Send the Join Request to the existing group.
-
-Step 2: Quorum Approval (Existing Participants)
-At least M existing participants must approve the new member.
-
-Bash
-sss-tool approve-participant \
-  --request <path_to_join_request> \
-  --share <path_to_my_private_share>
-Output: A "Partial Approval" or "Reshare" fragment.
-
-Action: Send this fragment to the new participant.
-
-Step 3: Finalize New Participant
-The new participant collects the approvals to construct their key share.
-
-Bash
-sss-tool finalize-join --approvals <list_of_approval_files>
-Output: trustserver_share.key
-
-Action: Securely back up this key.
