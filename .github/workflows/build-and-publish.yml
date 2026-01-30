@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout App Repo
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Checkout Database Repo
         uses: actions/checkout@v4
