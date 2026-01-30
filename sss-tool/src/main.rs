@@ -114,6 +114,8 @@ mod sss {
     use Aes256Gcm;
     use HashMap;
 
+    use std::env;
+    use std::io::Cursor;
     use std::io::Error;
     use std::io::ErrorKind;
 
@@ -549,9 +551,22 @@ mod sss {
             Ok(usize::from_le_bytes(buf))
         }
 
-        fn load_preffix(path: &str) -> std::io::Result<File> {
-            let mut reader = File::open(path)?;
+        fn load_preffix(path: &str, env_var: &str) -> std::io::Result<Box<dyn Read>> {
+            let reader: Box<dyn Read> = match File::open(path) {
+                Ok(f) => Box::new(f),
+                Err(e) => {
+                    if let Ok(val) = env::var(env_var) {
+                        let bytes = general_purpose::STANDARD
+                            .decode(val)
+                            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+                        Box::new(Cursor::new(bytes))
+                    } else {
+                        return Err(e);
+                    }
+                }
+            };
 
+            let mut reader = reader;
             let ver = Self::read_u32(&mut reader)?;
             if SSS_DATA_VER != ver {
                 return Err(std::io::Error::other("unsupported ver"));
@@ -561,7 +576,7 @@ mod sss {
         }
 
         pub fn load_private_only() -> std::io::Result<State> {
-            let mut reader = Self::load_preffix(FILE_PRIVATE)?;
+            let mut reader = Self::load_preffix(FILE_PRIVATE, "PRIVATE_SSS")?;
 
             let mut seed = [0_u8; 32];
             reader.read_exact(&mut seed)?;
@@ -599,7 +614,7 @@ mod sss {
         }
 
         pub fn load_shared(&mut self) -> anyhow::Result<()> {
-            let mut reader = Self::load_preffix(FILE_SHARED)?;
+            let mut reader = Self::load_preffix(FILE_SHARED, "SHARED_SSS")?;
 
             let mut flag = [0_u8];
             reader.read_exact(&mut flag)?;
