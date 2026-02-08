@@ -56,7 +56,7 @@ sss-tool init-common --pub-datas '{...}'
 # where '{...}' is the json that contains all the initial commitments (as described in the previous step).
 ```
 
-Output: Generates a local configuration file `shares.sss`, and prints out the json with encrypted partial shares to all other participants. Example:
+Output: Generates a local configuration file `shared.sss`, and prints out the json with encrypted partial shares to all other participants. Example:
 ```
 {"alice":{"bob": "xxxx", "charlie": "xxxxx", ...}}
 ```
