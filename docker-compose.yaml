@@ -1,0 +1,19 @@
+version: "3"
+
+services:
+  trust-server:
+    image: ghcr.io/proofofcloud/trust-server:sha-048166fe9bd9884b0bc6de1e9244316a4e224a75
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - YOUR_CERT_PATH_ON_HOST:/cert
+    environment:
+      - HTTPS_ENABLED=true
+      - MULTISIG_MODE=true
+      - HTTPS_KEY_PATH=/cert/YOUR_CERT_KEY_NAME
+      - HTTPS_CERT_PATH=/cert/YOUR_CERT_NAME
+      - PRIVATE_SSS=${PRIVATE_SSS}
+      - SHARED_SSS=${SHARED_SSS}
+    ports:
+      - 443:8080
