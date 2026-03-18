@@ -1,14 +1,45 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ---- Hardcoded config ----
+# ---- Config ----
 M=3
-COSIGNERS=(
-  "http://localhost:8081/get_jwt"
-  "http://localhost:8082/get_jwt"
-  "http://localhost:8083/get_jwt"
-  "http://localhost:8084/get_jwt"
-)
+PEERS_LIST_URL="https://raw.githubusercontent.com/proofofcloud/trust-server/main/public_info/peers_list.txt"
+
+need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 2; }; }
+need_cmd curl
+need_cmd jq
+
+# Fetch cosigners from remote peers list
+fetch_cosigners() {
+  local peers
+  if ! peers="$(curl -sS --fail "$PEERS_LIST_URL" 2>/dev/null)"; then
+    echo "Error: failed to fetch peers list from $PEERS_LIST_URL" >&2
+    exit 2
+  fi
+
+  local urls=()
+  while IFS= read -r line; do
+    # Skip empty lines and comments
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    # Remove trailing slash if present, then append /get_jwt
+    line="${line%/}"
+    urls+=("${line}/get_jwt")
+  done <<< "$peers"
+
+  if (( ${#urls[@]} == 0 )); then
+    echo "Error: no peers found in peers list" >&2
+    exit 2
+  fi
+
+  printf '%s\n' "${urls[@]}"
+}
+
+COSIGNERS=()
+while IFS= read -r _line; do
+  COSIGNERS+=("$_line")
+done < <(fetch_cosigners)
+
+echo "Fetched ${#COSIGNERS[@]} cosigner(s) from peers list"
 
 # ---- Args ----
 if [[ $# -ne 1 ]]; then
