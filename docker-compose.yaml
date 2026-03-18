@@ -2,7 +2,7 @@ version: "3"
 
 services:
   trust-server:
-    image: ghcr.io/proofofcloud/trust-server:sha-048166fe9bd9884b0bc6de1e9244316a4e224a75
+    image: ghcr.io/proofofcloud/trust-server:sha-1a72e1827d0f15606ac50d4eebc72d3a160388c7
     env_file:
       - .env
     volumes:
