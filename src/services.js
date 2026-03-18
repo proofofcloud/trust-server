@@ -201,23 +201,21 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
     .createHash("sha256")
     .update(Buffer.from(hexQuote, "hex"))
     .digest("hex");
-  let machineIdHex;
+  let machineId;
 
   // TDX quotes are typically larger (> 4KB), SEV-SNP are smaller (~1KB)
   if (hexQuote.length > 8000) {
     // Approx 4000 bytes * 2 hex chars
     const output = await runDcapCheck(hexQuote);
-    const match = output.match(/PPID:\s*([0-9a-fA-F]+)/i);
-    if (!match) throw new Error("PPID not found in attestation output");
-    machineIdHex = match[1];
+    const match = output.match(/Machine-ID:\s*([0-9a-fA-F]+)/i);
+    if (!match) throw new Error("Machine-ID not found in attestation output");
+    machineId = match[1];
   } else {
-    machineIdHex = await runSevSnpCheck(hexQuote);
+    machineId = await runSevSnpCheck(hexQuote);
   }
 
-  const machineId = crypto
-    .createHash("sha256")
-    .update(Buffer.from(machineIdHex, "hex"))
-    .digest("hex");
+  machineId = machineId.toLowerCase();
+
   const validNode = state.whitelist.find((entry) =>
     machineId.startsWith(entry.id),
   );
