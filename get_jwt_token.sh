@@ -54,6 +54,7 @@ if [[ ! -f "$QUOTE_PATH" ]]; then
 fi
 
 QUOTE="$(cat "$QUOTE_PATH")"
+TIMESTAMP=$(date +%s)
 
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 2; }; }
 need_cmd curl
@@ -69,27 +70,24 @@ post_json() {
     -d "$payload"
 }
 
-# Builds {"quote":"..."} safely with jq (handles quotes/newlines)
-payload_stage1() {
-  jq -cn --arg quote "$QUOTE" '{quote:$quote}'
-}
-
 # Builds {"quote":"...","nonces":{...},"partial_sigs":{...}} with jq
-payload_stage2() {
-  local nonces_json="$1"       # JSON object
-  local partial_sigs_json="$2" # JSON object
-  jq -cn --arg quote "$QUOTE" \
-        --argjson nonces "$nonces_json" \
-        --argjson partial_sigs "$partial_sigs_json" \
-        '{quote:$quote, nonces:$nonces, partial_sigs:$partial_sigs}'
-}
+payload() {
+  local nonces_json="${1:-null}"
+  local partial_sigs_json="${2:-null}"
 
-# Like stage2 but without partial_sigs (first signer in chain)
-payload_stage2_first() {
-  local nonces_json="$1"
-  jq -cn --arg quote "$QUOTE" \
-        --argjson nonces "$nonces_json" \
-        '{quote:$quote, nonces:$nonces}'
+  jq -cn \
+    --arg quote "$QUOTE" \
+    --argjson timestamp "$TIMESTAMP" \
+    --argjson nonces "$nonces_json" \
+    --argjson partial_sigs "$partial_sigs_json" \
+    '
+    {
+      quote: $quote,
+      timestamp: $timestamp
+    }
+    + (if $nonces != null then {nonces: $nonces} else {} end)
+    + (if $partial_sigs != null then {partial_sigs: $partial_sigs} else {} end)
+    '
 }
 
 # ---- Stage 1: collect moniker+nonce until quorum ----
@@ -99,7 +97,7 @@ declare -A NONCE_BY_MONIKER=()
 echo "Stage 1: collecting nonces (need M=$M)..."
 
 for url in "${COSIGNERS[@]}"; do
-  payload="$(payload_stage1)"
+  payload="$(payload)"
   echo "  -> $url"
   if ! resp="$(post_json "$url" "$payload" 2>/dev/null)"; then
     echo "     (skip: request failed)"
@@ -157,11 +155,7 @@ for i in "${!CHOSEN_MONIKERS[@]}"; do
   moniker="${CHOSEN_MONIKERS[$i]}"
   url="${URL_BY_MONIKER[$moniker]}"
 
-  if [[ "$partial_sigs_json" == "{}" ]]; then
-    payload="$(payload_stage2_first "$nonces_json")"
-  else
-    payload="$(payload_stage2 "$nonces_json" "$partial_sigs_json")"
-  fi
+  payload="$(payload "$nonces_json" "$partial_sigs_json")"
 
   echo "  -> $url (as $moniker)"
   if ! resp="$(post_json "$url" "$payload" 2>/dev/null)"; then
