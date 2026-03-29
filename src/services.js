@@ -192,9 +192,25 @@ function base64url(input) {
     .replace(/=+$/g, ""); // remove trailing '='
 }
 
-async function processQuote(hexQuote, nonces, partial_sigs) {
+async function processQuote(hexQuote, timestamp, nonces, partial_sigs) {
+
+  if (!hexQuote) {
+    throw new Error("Missing quote");
+  }
+
   if (!/^[0-9a-fA-F]+$/.test(hexQuote)) {
     throw new Error("Invalid quote format: must be hex string");
+  }
+
+  const time_now_s = Math.floor(Date.now() / 1000);
+
+  if (!timestamp) {
+    timestamp = time_now_s;
+  } else {
+    const max_diff_s = 5 * 60; // 5 minutes in seconds
+    if (Math.abs(time_now_s - timestamp) > max_diff_s) {
+      throw new Error("timestamp too distant");
+    }
   }
 
   const quoteHash = crypto
@@ -231,6 +247,7 @@ async function processQuote(hexQuote, nonces, partial_sigs) {
     quote_hash: quoteHash,
     machine_id: machineId,
     label: validNode.label,
+    timestamp: timestamp,
   };
 
   let jwt_token = null;
