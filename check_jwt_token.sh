@@ -111,15 +111,16 @@ fi
 
 echo "Signature: OK"
 
-# Extract quote_hash
-QUOTE_HASH_FROM_JWT="$(python3 - "$PAY" <<'PY'
+# Extract quote_hash and timestamp
+read -r QUOTE_HASH_FROM_JWT TIMESTAMP_FROM_JWT < <(
+python3 - "$PAY" <<'PY'
 import sys, base64, json
 s = sys.argv[1]
 s += "=" * ((4 - len(s) % 4) % 4)
 obj = json.loads(base64.urlsafe_b64decode(s))
-print(obj["quote_hash"])
+print(obj["quote_hash"], obj["timestamp"])
 PY
-)"
+)
 
 if [[ "$QUOTE_HASH_ACTUAL" != "$QUOTE_HASH_FROM_JWT" ]]; then
   echo "Error: quote hash mismatch" >&2
@@ -127,3 +128,20 @@ if [[ "$QUOTE_HASH_ACTUAL" != "$QUOTE_HASH_FROM_JWT" ]]; then
 fi
 
 echo "Quote hash verified OK"
+
+# check the timestamp
+NOW_TS=$(date +%s)
+DIFF=$(( NOW_TS - TIMESTAMP_FROM_JWT ))
+
+if (( $DIFF < 0 )); then
+  echo "Error: Timestamp in the future: $TIMESTAMP_FROM_JWT"
+  exit 1
+fi
+
+if (( $DIFF > 3600*24*7 )); then
+  echo "Error: Timestamp too old: $TIMESTAMP_FROM_JWT"
+  echo "Time elapsed (s) : $DIFF"
+  exit 1
+fi
+
+echo "Timestamp is OK"
