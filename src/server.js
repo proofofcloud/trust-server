@@ -3,7 +3,7 @@ const fs = require("fs");
 const https = require("https");
 const http = require("http");
 const config = require("./config");
-const { loadSecrets, processQuote, verifyToken } = require("./services");
+const { loadSecrets, processQuote, checkQuote, verifyToken } = require("./services");
 
 const app = express();
 app.use(express.json());
@@ -18,6 +18,15 @@ app.post(
   asyncHandler(async (req, res) => {
     const { quote, timestamp, nonces, partial_sigs } = req.body;
     const result = await processQuote(quote, timestamp, nonces, partial_sigs);
+    res.json(result);
+  }),
+);
+
+app.post(
+  "/check_quote",
+  asyncHandler(async (req, res) => {
+    const { quote } = req.body;
+    const result = await checkQuote(quote);
     res.json(result);
   }),
 );
@@ -38,7 +47,10 @@ app.post(
 // Global Error Handler
 app.use((err, req, res, next) => {
   console.error(`Error processing request: ${err.message}`);
-  const status = err.message.includes("not whitelisted") ? 403 : 500;
+  const isDenial =
+    err.message.includes("not whitelisted") ||
+    err.message.includes("was revoked on");
+  const status = isDenial ? 403 : 500;
   res.status(status).json({ error: err.message });
 });
 

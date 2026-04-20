@@ -9,6 +9,7 @@ const state = {
   publicKey: null,
   keyRegistry: {},
   whitelist: [],
+  revoked: [],
   keyId: null,
   multisig: {
     moniker: null,
@@ -53,11 +54,32 @@ async function loadSecrets() {
         .filter((line) => line.length > 0 && !line.startsWith("#"))
         .map((line) => {
           const [id, label] = line.split(",");
-          return { id: id.trim(), label: label ? label.trim() : "unlabeled" };
+          return {
+            id: id.trim().toLowerCase(),
+            label: label ? label.trim() : "unlabeled",
+          };
         });
       console.log(`✅ Loaded ${state.whitelist.length} whitelist entries.`);
     } else {
       console.warn("⚠️  No whitelist found. All requests will be rejected.");
+    }
+
+    if (fs.existsSync(config.PATHS.REVOKED)) {
+      const revokedRaw = fs.readFileSync(config.PATHS.REVOKED, "utf8");
+      state.revoked = revokedRaw
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && !line.startsWith("#"))
+        .map((line) => {
+          const [id, revokedAt] = line.split(",");
+          return {
+            id: id.trim().toLowerCase(),
+            revokedAt: revokedAt ? revokedAt.trim() : "unknown",
+          };
+        });
+      console.log(`✅ Loaded ${state.revoked.length} revocation entries.`);
+    } else {
+      console.warn("⚠️  No revocation list found. Revocation is disabled.");
     }
 
     if (config.MULTISIG_MODE) {
@@ -147,7 +169,27 @@ function runSss(args) {
 }
 
 function runDcapCheck(hexQuote) {
-  return execCommand(config.ATTESTER_BIN, ["check", hexQuote]);
+  // The Intel attester exits 0 even when verification fails — the real error
+  // is printed to stderr. We need both streams to surface useful errors.
+  return new Promise((resolve, reject) => {
+    const child = spawn(config.ATTESTER_BIN, ["check", hexQuote]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        const errorDetails = stderr || stdout || "No output";
+        return reject(
+          new Error(`attester failed (code ${code}): ${errorDetails}`),
+        );
+      }
+      resolve({ stdout, stderr });
+    });
+    child.on("error", (err) => {
+      reject(new Error(`Failed to spawn attester: ${err.message}`));
+    });
+  });
 }
 
 async function runSevSnpCheck(hexQuote) {
@@ -168,6 +210,45 @@ async function runSevSnpCheck(hexQuote) {
   } catch (error) {
     throw new Error(`AMD Verifier failed: ${error.message}`);
   }
+}
+
+async function verifyAndLookupMachine(hexQuote) {
+  if (!hexQuote) {
+    throw new Error("Missing quote");
+  }
+
+  if (!/^[0-9a-fA-F]+$/.test(hexQuote)) {
+    throw new Error("Invalid quote format: must be hex string");
+  }
+
+  let machineId;
+
+  // TDX quotes are typically larger (> 4KB), SEV-SNP are smaller (~1KB)
+  if (hexQuote.length > 8000) {
+    // Approx 4000 bytes * 2 hex chars
+    const { stdout, stderr } = await runDcapCheck(hexQuote);
+    const match = stdout.match(/Machine-ID:\s*([0-9a-fA-F]+)/i);
+    if (!match) {
+      const detail = stderr.trim() || stdout.trim() || "no output";
+      throw new Error(`Quote verification failed: ${detail}`);
+    }
+    machineId = match[1];
+  } else {
+    machineId = await runSevSnpCheck(hexQuote);
+  }
+
+  machineId = machineId.toLowerCase();
+
+  const revocationEntry = state.revoked.find((e) => e.id === machineId) || null;
+  const revocation = revocationEntry
+    ? { revokedAt: revocationEntry.revokedAt }
+    : null;
+
+  const entry = revocation
+    ? null
+    : state.whitelist.find((e) => e.id === machineId) || null;
+
+  return { machineId, entry, revocation };
 }
 
 function normalizeKvJson(inp) {
@@ -194,14 +275,6 @@ function base64url(input) {
 
 async function processQuote(hexQuote, timestamp, nonces, partial_sigs) {
 
-  if (!hexQuote) {
-    throw new Error("Missing quote");
-  }
-
-  if (!/^[0-9a-fA-F]+$/.test(hexQuote)) {
-    throw new Error("Invalid quote format: must be hex string");
-  }
-
   const time_now_s = Math.floor(Date.now() / 1000);
 
   if (!timestamp) {
@@ -213,28 +286,17 @@ async function processQuote(hexQuote, timestamp, nonces, partial_sigs) {
     }
   }
 
-  const quoteHash = crypto
-    .createHash("sha256")
-    .update(Buffer.from(hexQuote, "hex"))
-    .digest("hex");
-  let machineId;
+  const { machineId, entry: validNode, revocation } =
+    await verifyAndLookupMachine(hexQuote);
 
-  // TDX quotes are typically larger (> 4KB), SEV-SNP are smaller (~1KB)
-  if (hexQuote.length > 8000) {
-    // Approx 4000 bytes * 2 hex chars
-    const output = await runDcapCheck(hexQuote);
-    const match = output.match(/Machine-ID:\s*([0-9a-fA-F]+)/i);
-    if (!match) throw new Error("Machine-ID not found in attestation output");
-    machineId = match[1];
-  } else {
-    machineId = await runSevSnpCheck(hexQuote);
+  if (revocation) {
+    console.warn(
+      `⛔ Access Denied: Machine ID ${machineId} was revoked on ${revocation.revokedAt}.`,
+    );
+    throw new Error(
+      `Machine ${machineId} was revoked on ${revocation.revokedAt}`,
+    );
   }
-
-  machineId = machineId.toLowerCase();
-
-  const validNode = state.whitelist.find((entry) =>
-    machineId.startsWith(entry.id),
-  );
 
   if (!validNode) {
     console.warn(
@@ -242,6 +304,11 @@ async function processQuote(hexQuote, timestamp, nonces, partial_sigs) {
     );
     throw new Error("Machine is not whitelisted.");
   }
+
+  const quoteHash = crypto
+    .createHash("sha256")
+    .update(Buffer.from(hexQuote, "hex"))
+    .digest("hex");
 
   const payload = {
     quote_hash: quoteHash,
@@ -336,6 +403,16 @@ async function processQuote(hexQuote, timestamp, nonces, partial_sigs) {
   return { machineId, label: validNode.label, jwt: jwt_token };
 }
 
+async function checkQuote(hexQuote) {
+  const { machineId, entry, revocation } = await verifyAndLookupMachine(hexQuote);
+  const response = { whitelisted: entry !== null, machine_id: machineId };
+  if (revocation) {
+    response.revoked = true;
+    response.revoked_at = revocation.revokedAt;
+  }
+  return response;
+}
+
 async function verifyToken(hexQuote, token) {
   if (!/^[0-9a-fA-F]+$/.test(hexQuote)) {
     throw new Error("Invalid quote format");
@@ -363,4 +440,4 @@ async function verifyToken(hexQuote, token) {
   return { valid: true, keyId: kid, label };
 }
 
-module.exports = { loadSecrets, processQuote, verifyToken };
+module.exports = { loadSecrets, processQuote, checkQuote, verifyToken };

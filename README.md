@@ -4,7 +4,7 @@ A Node.js web service for processing Intel SGX/TDX and AMD SEV-SNP quotes. It va
 
 ## Overview
 
-This service acts as a trust anchor for Confidential Computing workflows. It accepts raw hardware quotes (hex encoded), validates them using the appropriate internal tool (attester for Intel or amd-verifier for AMD), extracts a unique hardware identifier (Chip ID or PPID), checks it against a whitelist of verified providers, and returns a signed JWT.
+This service acts as a trust anchor for Confidential Computing workflows. It accepts raw hardware quotes (hex encoded), validates them using the appropriate internal tool (attester for Intel or amd-verifier for AMD), extracts a unique hardware identifier (Chip ID or PPID), and checks it against a whitelist of verified providers and a revocation list of blocked machines. Verified non-revoked quotes receive a signed JWT; callers that only need a yes/no answer can use the dedicated `/check_quote` endpoint.
 
 ## Features
 
@@ -16,7 +16,9 @@ This service acts as a trust anchor for Confidential Computing workflows. It acc
     * Extracts PPID (Platform Provisioning ID) for Intel quotes.
     * Extracts Chip ID for AMD SEV-SNP reports.
 * **Whitelist Verification**: Checks hardware IDs against a strict whitelist of approved machines (sourced from the Proof of Cloud database).
-* **JWT Generation**: Issues RS256-signed JWT tokens containing the machine ID, label, and quote hash.
+* **Revocation List**: Deny-list of revoked hardware IDs with revocation timestamps. Takes precedence over the whitelist; also sourced from the Proof of Cloud database and baked into the image at build time.
+* **JWT Generation**: Issues RS256-signed JWT tokens containing the machine ID, label, and quote hash. Revoked machines are denied with an HTTP 403 and a revocation-specific error message.
+* **Lightweight Check Endpoint**: `POST /check_quote` answers "is this machine on our whitelist?" without issuing a JWT — useful for monitoring, gating, and ops tooling.
 
 ## API Endpoints
 
@@ -41,6 +43,50 @@ Processes an SGX or TDX quote and returns verification results.
   "jwt": "rs256_signed_jwt_token"  // OR partial signature data in Multisig Mode
 }
 ```
+
+**Error responses:**
+- `403 { "error": "Machine is not whitelisted." }` — hardware ID is unknown.
+- `403 { "error": "Machine <id> was revoked on <iso8601_timestamp>" }` — hardware ID has been revoked.
+- `500` — verifier failure, malformed input, or other server error.
+
+### `POST /check_quote`
+
+Verifies an attestation quote and returns whether the underlying machine is on the whitelist. Does **not** issue a JWT; does **not** require multisig coordination. Intended for lightweight "is this machine approved?" checks.
+
+**Request Body:**
+```json
+{
+  "quote": "hex_encoded_sgx_or_tdx_quote"
+}
+```
+
+**Response (whitelisted):**
+```json
+{
+  "whitelisted": true,
+  "machine_id": "hex_machine_id"
+}
+```
+
+**Response (not whitelisted, not revoked):**
+```json
+{
+  "whitelisted": false,
+  "machine_id": "hex_machine_id"
+}
+```
+
+**Response (revoked — whether or not also whitelisted):**
+```json
+{
+  "whitelisted": false,
+  "machine_id": "hex_machine_id",
+  "revoked": true,
+  "revoked_at": "2026-04-16T12:00:00Z"
+}
+```
+
+Revocation takes precedence over whitelisting: a machine in both lists is reported as `revoked`.
 
 ### `POST /verify_token`
 
