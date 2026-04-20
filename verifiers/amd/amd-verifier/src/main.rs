@@ -43,11 +43,36 @@ fn default_cert_cache_path() -> PathBuf {
 enum ValidateResult {
     Success {
         chip_id: String,
+        measurement: String,
+        host_data: String,
+        report_data: String,
+        policy: String,
+        reported_tcb: String,
+        id_key_digest: String,
     },
     Failure {
         error_code: ErrorCode,
         message: String,
     },
+}
+
+/// Serialize a TcbVersion as a stable 16-char lowercase hex string.
+///
+/// The byte layout depends on whether the report's TCB uses the legacy
+/// (pre-FMC) or Turin (FMC-enabled) format. These two layouts mirror the
+/// `sev` crate's internal `TcbVersion::to_legacy_bytes` and `to_turin_bytes`
+/// functions — we reconstruct the on-wire 8-byte representation and reinterpret
+/// as u64 (little-endian). This is necessary because `sev` 7.1.0 does not
+/// expose a public "serialize back to u64" method.
+///
+/// If the `sev` crate ever changes how `AttestationReport::from_bytes` parses
+/// the TCB, update this helper to match the new byte layout.
+fn tcb_to_u64_hex(tcb: &sev::firmware::host::TcbVersion) -> String {
+    let bytes = match tcb.fmc {
+        None => [tcb.bootloader, tcb.tee, 0u8, 0u8, 0u8, 0u8, tcb.snp, tcb.microcode],
+        Some(fmc) => [fmc, tcb.bootloader, tcb.tee, tcb.snp, 0u8, 0u8, 0u8, tcb.microcode],
+    };
+    format!("{:016x}", u64::from_le_bytes(bytes))
 }
 
 async fn validate(args: ValidateArgs) -> Result<ValidateResult, ValidateError> {
@@ -77,6 +102,12 @@ async fn validate(args: ValidateArgs) -> Result<ValidateResult, ValidateError> {
 
     Ok(ValidateResult::Success {
         chip_id: hex::encode(report.chip_id),
+        measurement: hex::encode(report.measurement),
+        host_data: hex::encode(report.host_data),
+        report_data: hex::encode(report.report_data),
+        policy: format!("{:016x}", report.policy.0),
+        reported_tcb: tcb_to_u64_hex(&report.reported_tcb),
+        id_key_digest: hex::encode(report.id_key_digest),
     })
 }
 
