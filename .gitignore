@@ -1,3 +1,6 @@
 node_modules
 jwt_key.pem
 target
+docs/superpowers/
+src/whitelist.csv
+src/revoked.txt
