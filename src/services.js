@@ -203,10 +203,26 @@ async function runSevSnpCheck(hexQuote) {
     if (result.result !== "success") {
       throw new Error(result.message || "Unknown verification error");
     }
-    if (!result.chip_id) {
-      throw new Error("'chip_id' missing in response");
-    }
-    return result.chip_id;
+
+    const requireField = (key) => {
+      if (!result[key]) {
+        throw new Error(`'${key}' missing in response`);
+      }
+      return String(result[key]).toLowerCase();
+    };
+
+    const chipId = requireField("chip_id");
+    const tee = {
+      type: "sev-snp",
+      measurement: requireField("measurement"),
+      host_data: requireField("host_data"),
+      report_data: requireField("report_data"),
+      policy: requireField("policy"),
+      reported_tcb: requireField("reported_tcb"),
+      id_key_digest: requireField("id_key_digest"),
+    };
+
+    return { chipId, tee };
   } catch (error) {
     throw new Error(`AMD Verifier failed: ${error.message}`);
   }
@@ -222,19 +238,19 @@ async function verifyAndLookupMachine(hexQuote) {
   }
 
   let machineId;
+  let tee;
 
   // TDX quotes are typically larger (> 4KB), SEV-SNP are smaller (~1KB)
   if (hexQuote.length > 8000) {
     // Approx 4000 bytes * 2 hex chars
     const { stdout, stderr } = await runDcapCheck(hexQuote);
-    const match = stdout.match(/Machine-ID:\s*([0-9a-fA-F]+)/i);
-    if (!match) {
-      const detail = stderr.trim() || stdout.trim() || "no output";
-      throw new Error(`Quote verification failed: ${detail}`);
-    }
-    machineId = match[1];
+    const parsed = parseAttesterOutput(stdout);
+    machineId = parsed.machineId;
+    tee = parsed.tee;
   } else {
-    machineId = await runSevSnpCheck(hexQuote);
+    const snp = await runSevSnpCheck(hexQuote);
+    machineId = snp.chipId;
+    tee = snp.tee;
   }
 
   machineId = machineId.toLowerCase();
@@ -249,6 +265,86 @@ async function verifyAndLookupMachine(hexQuote) {
     : state.whitelist.find((e) => e.id === machineId) || null;
 
   return { machineId, entry, revocation };
+}
+
+function parseAttesterOutput(stdout) {
+  const fields = {};
+  let sawTdx = false;
+  let sawSgx = false;
+
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === "TDX report_body") sawTdx = true;
+    if (trimmed === "SGX report_body") sawSgx = true;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx > 0) {
+      const key = trimmed.slice(0, eqIdx).trim();
+      const value = trimmed.slice(eqIdx + 1).trim();
+      fields[key] = value;
+    }
+  }
+
+  const machineIdMatch = stdout.match(/Machine-ID:\s*([0-9a-fA-F]+)/i);
+  if (!machineIdMatch) {
+    throw new Error("Machine-ID not found in attestation output");
+  }
+  const machineId = machineIdMatch[1];
+
+  if (!sawTdx && !sawSgx) {
+    throw new Error("Could not determine TEE type from attester output");
+  }
+
+  const requireHex = (key) => {
+    const v = fields[key];
+    if (v === undefined) {
+      throw new Error(`Missing expected quote field: ${key}`);
+    }
+    return v.toLowerCase();
+  };
+
+  const requireInt = (key) => {
+    const v = fields[key];
+    if (v === undefined) {
+      throw new Error(`Missing expected quote field: ${key}`);
+    }
+    const n = parseInt(v, 10);
+    if (Number.isNaN(n)) {
+      throw new Error(`Invalid ${key}: not a number`);
+    }
+    return n;
+  };
+
+  let tee;
+  if (sawTdx) {
+    tee = {
+      type: "tdx",
+      mr_td: requireHex("mr_td"),
+      mr_seam: requireHex("mr_seam"),
+      mr_signer_seam: requireHex("mr_signer_seam"),
+      td_attributes: requireHex("td_attributes"),
+      xfam: requireHex("xfam"),
+      tcb_svn: requireHex("tcb_svn"),
+      rtmr0: requireHex("rtmr0"),
+      rtmr1: requireHex("rtmr1"),
+      rtmr2: requireHex("rtmr2"),
+      rtmr3: requireHex("rtmr3"),
+      report_data: requireHex("report_data"),
+    };
+  } else {
+    tee = {
+      type: "sgx",
+      mr_enclave: requireHex("mr_enclave"),
+      mr_signer: requireHex("mr_signer"),
+      report_data: requireHex("report_data"),
+      attributes: requireHex("attributes"),
+      cpu_svn: requireHex("cpu_svn"),
+      isv_prod_id: requireInt("isv_prod_id"),
+      isv_svn: requireInt("isv_svn"),
+      config_svn: requireInt("config_svn"),
+    };
+  }
+
+  return { machineId, tee };
 }
 
 function normalizeKvJson(inp) {
@@ -315,6 +411,7 @@ async function processQuote(hexQuote, timestamp, nonces, partial_sigs) {
     machine_id: machineId,
     label: validNode.label,
     timestamp: timestamp,
+    tee: tee,
   };
 
   let jwt_token = null;
@@ -437,7 +534,12 @@ async function verifyToken(hexQuote, token) {
     throw new Error("Integrity check failed: Quote does not match Token");
   }
 
-  return { valid: true, keyId: kid, label };
+  return {
+    valid: true,
+    keyId: kid,
+    label,
+    tee: decoded.payload.tee || null,
+  };
 }
 
 module.exports = { loadSecrets, processQuote, checkQuote, verifyToken };

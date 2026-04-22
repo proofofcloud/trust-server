@@ -13,7 +13,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 attestation-verification = { path = "../attestation-verification" }
-sev = "7.1.0"
+sev = "=7.1.0"
 
 [dev-dependencies]
 rstest = { version = "0.26", default-features = false }
