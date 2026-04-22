@@ -29,10 +29,17 @@ jobs:
           path: temp-database-repo
           token: ${{ secrets.ORG_READ_TOKEN }}
 
-      - name: Inject Whitelist
+      - name: Inject Whitelist and Revocation List
         run: |
           echo "Copying whitelist.csv from database repo..."
           cat temp-database-repo/*.csv > ./src/whitelist.csv
+          if [ -f temp-database-repo/revoked.txt ]; then
+            echo "Found revoked.txt in database repo; copying."
+            cp temp-database-repo/revoked.txt ./src/revoked.txt
+          else
+            echo "WARNING: revoked.txt not found in database repo; using empty fallback."
+            : > ./src/revoked.txt
+          fi
           rm -rf temp-database-repo
 
       - name: Log in to the Container registry

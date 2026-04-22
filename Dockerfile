@@ -103,6 +103,7 @@ RUN npm ci
 
 COPY src/*.js ./
 COPY src/whitelist.csv ./
+COPY src/revoked.txt ./
 COPY src/keys.json ./
 
 EXPOSE 8080

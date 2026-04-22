@@ -18,5 +18,6 @@ module.exports = {
   PATHS: {
     KEYS: path.join(__dirname, "keys.json"),
     WHITELIST: path.join(__dirname, "whitelist.csv"),
+    REVOKED: path.join(__dirname, "revoked.txt"),
   },
 };
