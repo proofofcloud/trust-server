@@ -264,7 +264,7 @@ async function verifyAndLookupMachine(hexQuote) {
     ? null
     : state.whitelist.find((e) => e.id === machineId) || null;
 
-  return { machineId, entry, revocation };
+  return { machineId, entry, revocation, tee };
 }
 
 function parseAttesterOutput(stdout) {
@@ -370,7 +370,6 @@ function base64url(input) {
 }
 
 async function processQuote(hexQuote, timestamp, nonces, partial_sigs) {
-
   const time_now_s = Math.floor(Date.now() / 1000);
 
   if (!timestamp) {
@@ -382,8 +381,12 @@ async function processQuote(hexQuote, timestamp, nonces, partial_sigs) {
     }
   }
 
-  const { machineId, entry: validNode, revocation } =
-    await verifyAndLookupMachine(hexQuote);
+  const {
+    machineId,
+    entry: validNode,
+    revocation,
+    tee,
+  } = await verifyAndLookupMachine(hexQuote);
 
   if (revocation) {
     console.warn(
@@ -501,7 +504,8 @@ async function processQuote(hexQuote, timestamp, nonces, partial_sigs) {
 }
 
 async function checkQuote(hexQuote) {
-  const { machineId, entry, revocation } = await verifyAndLookupMachine(hexQuote);
+  const { machineId, entry, revocation } =
+    await verifyAndLookupMachine(hexQuote);
   const response = { whitelisted: entry !== null, machine_id: machineId };
   if (revocation) {
     response.revoked = true;

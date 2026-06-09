@@ -1,8 +1,7 @@
 name: Build and Publish Docker Image
 
 on:
-  repository_dispatch:
-    types: [db-updated]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -62,7 +61,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile 
+          file: ./Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
